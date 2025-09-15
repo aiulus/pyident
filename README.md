@@ -1,3 +1,4 @@
+'''
 pyident/
   __init__.py
   config.py             # dataclasses for SolverOpts, ExpConfig, RunMeta
@@ -14,3 +15,4 @@ pyident/
   run_single.py         # run_single(cfg, seed, sopts, estimators=[...])
   cli.py                # argparse entry point
   jax_accelerator.py          
+'''
