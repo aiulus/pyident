@@ -404,7 +404,7 @@ def run_underactuation(
             ncols = max(3, len(var_per_algo))
             fig, axes = plt.subplots(2, ncols, figsize=(4 * ncols, 7), sharex="col")
             metric_keys = ["d_frob", "sigma_min_K", "mu_min"]
-            titles = [r"$\\d{\\mathrm{Frob}}$", r"$\\sigma_{\\min}(K)$", r"$\\mu_{\\min}$"]
+            titles = [r"d_Frob", r"sigma_min_K", r"mu_min"]
             for j, (k, title) in enumerate(zip(metric_keys, titles)):
                 means, lo, hi = [], [], []
                 for arr in metrics_per_m[k]:
