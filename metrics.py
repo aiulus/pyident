@@ -2,7 +2,7 @@ from __future__ import annotations
 import numpy as np
 import numpy.linalg as npl
 from typing import Tuple, Optional
-from scipy.linalg import expm, solve_continuous_lyapunov, null_space
+from scipy.linalg import expm, eigvals, solve_continuous_lyapunov, solve_discrete_lyapunov, null_space
 
 # ---------------------------------------------------------------------
 # Metrics & core objects 
@@ -174,6 +174,30 @@ def gramian_dt_finite(A: np.ndarray, K: np.ndarray, T: int) -> np.ndarray:
         Ak = A @ Ak
     return W
 
+def gramian_infinite(A: np.ndarray, B: np.ndarray):
+    """
+    Return infinite-horizon controllability Gramian W (CT if Hurwitz, else DT if rho(A)<1),
+    or None if neither converges.
+    """
+    vals = eigvals(A)
+    lam_max_real = float(np.max(np.real(vals))) if vals.size else 0.0
+    # CT case: Hurwitz
+    if lam_max_real < -1e-8:
+        try:
+            return solve_continuous_lyapunov(A, -(B @ B.T))
+        except Exception:
+            return None
+    # DT case: spectral radius < 1
+    try:
+        rho = float(np.max(np.abs(vals)))
+    except Exception:
+        rho = np.inf
+    if rho < 1 - 1e-8:
+        try:
+            return solve_discrete_lyapunov(A, B @ B.T)
+        except Exception:
+            return None
+    return None
 
 # ====================== PBH margins (to move to pbh.py if desired) ===
 

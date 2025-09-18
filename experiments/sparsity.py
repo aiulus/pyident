@@ -60,8 +60,9 @@ def sweep_sparsity(
             cfg = ExpConfig(
                 n=n, m=m, T=T, dt=dt,
                 ensemble="sparse",
-                p_density=p,
-                sparse_which=sparse_which,
+                sparse_which=sparse_which,   # "A","B","both"
+                p_density=p if sparse_which in ("A","both") else None,              
+                p_density_B=p if sparse_which in ("B","both") else None,
                 signal=signal,
                 sigPE=sigPE,
                 algs=algs,

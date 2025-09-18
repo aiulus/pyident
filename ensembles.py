@@ -35,9 +35,10 @@ def rademacher(n: int, m: int, rng: np.random.Generator) -> Tuple[np.ndarray, np
 def sparse_continuous(
     n: int,
     m: int,
-    p_density_A: float,
+    p_density: float,
     rng: np.random.Generator,
     which: Literal["A", "B", "both"] = "both",
+    p_density_A: Optional[float] = None,
     p_density_B: Optional[float] = None,
     check_zero_rows: bool = False,
     max_attempts: int = 200,
@@ -72,10 +73,8 @@ def sparse_continuous(
     -------
     A, B : np.ndarray
     """
-    if not (0.0 <= p_density_A <= 1.0):
-        raise ValueError("p_density_A must be in [0,1].")
-    if p_density_B is not None and not (0.0 <= p_density_B <= 1.0):
-        raise ValueError("p_density_B must be in [0,1].")
+    p_density_A = p_density_A if p_density_A is not None else p_density
+    p_density_B = p_density_B if p_density_B is not None else p_density
 
     A = rng.standard_normal((n, n))
     B = rng.standard_normal((n, m))

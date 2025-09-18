@@ -35,7 +35,8 @@ def _select_ensemble(cfg: ExpConfig, rng: np.random.Generator):
         return sparse_continuous(
             cfg.n, cfg.m, cfg.p_density, rng,
             which=cfg.sparse_which,
-            b_density=cfg._density_B if cfg.sparse_which in ("B", "both") else None,
+            p_density_A=cfg._density_A if cfg.sparse_which in ("A", "both") else None,
+            p_density_B=cfg._density_B if cfg.sparse_which in ("B", "both") else None,
         )
     if cfg.ensemble == "stable":
         return stable(cfg.n, cfg.m, rng)
@@ -244,10 +245,10 @@ def run_single(cfg: ExpConfig,
     if "moesp" in algs:
         try:
             # Simple PI-MOESP assuming full-state output y = x
-            from .estimators.moesp import moesp as moesp_core
+            from .estimators.moesp import moesp_fit as moesp_core
             y = X.T  # (T+1, n)
             s_use = max(cfg.n, min(10, cfg.T // 4))  # keep s >= n (heuristic)
-            Ahat, Bhat, Chat = moesp_core(u, y, s=s_use, n=cfg.n)
+            Ahat, Bhat = moesp_core(Xtrain, Xp, Utrain, s=s_use, n=cfg.n)
             errA, errB = projected_errors(Ahat, Bhat, Ad, Bd, Vbasis=Vbasis)
             results_est["moesp"] = {"A_err_PV": errA, "B_err_PV": errB}
         except Exception as e:
