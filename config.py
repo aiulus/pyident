@@ -4,39 +4,70 @@ from dataclasses import dataclass, field
 from typing import Literal, Optional, Sequence, Dict, Any
 import numpy as np
 
+
 @dataclass
 class SolverOpts:
+    """Generic nonlinear solver options."""
     maxit: int = 150
     tol_grad: float = 1e-8
     random_state: Optional[int] = 0
 
+
 @dataclass
 class ExpConfig:
+    """Experiment configuration (single run)."""
     n: int = 10
     m: int = 3
-    T: int = 400 # time horizon (number of steps)
-    dt: float = 0.02
+    T: int = 400 # time steps
+    dt: float = 0.02 # sampling step      
 
     ensemble: Literal["ginibre", "sparse", "stable", "binary"] = "ginibre"
 
-    # --- Sparse-continuous ensemble options ---
+    # --- Sparse–continuous ensemble options ---
     p_density: float = 0.8                      
-    sparse_which: Literal["A", "B", "both"] = "both" # which matrix to sparsify
-    p_density_A: Optional[float] = None         
-    p_density_B: Optional[float] = None        
-         
+    sparse_which: Literal["A", "B", "both"] = "both"
+    p_density_A: Optional[float] = None          
+    p_density_B: Optional[float] = None         
+
     x0_mode: Literal["gaussian", "rademacher", "ones", "zero"] = "gaussian"
 
     # --- Input signal options ---
     signal: Literal["prbs", "multisine"] = "prbs"
-    pe_order_target: int = 12            
-    U_restr: Optional[np.ndarray] = None  # Pointwise input constraints - generator matrix
-    PE_r: Optional[int] = None # PE (nonlocal) constraints - order of excitation
+    pe_order_target: int = 12 # desired PE order for the control input                   
+    U_restr: Optional[np.ndarray] = None # pointwise constraint basis W \in R^{m×q}
+    PE_r: Optional[int] = None                   # moment-PE (nonlocal) constraint
 
-    # --- Identification algorithms --- 
-    estimators: Sequence[str] = ("dmdc", "moesp") 
+    # --- Identification algorithms ---
+    estimators: Sequence[str] = ("dmdc", "moesp")
 
-    light: bool = True # leightweight io toggle                  
+    light: bool = True
+
+    # Derived/validated fields (filled in __post_init__)
+    _density_A: float = field(init=False, repr=False)
+    _density_B: float = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        # Validate densities & set effective A/B densities
+        def _pick(name: str, val: Optional[float], fallback: float) -> float:
+            x = fallback if val is None else float(val)
+            if not (0.0 <= x <= 1.0):
+                raise ValueError(f"{name} must be in [0,1], got {x}.")
+            return x
+
+        self._density_A = _pick("p_density_A", self.p_density_A, self.p_density)
+        self._density_B = _pick("p_density_B", self.p_density_B, self.p_density)
+
+        # Validate U_restr shape if provided
+        if self.U_restr is not None:
+            if self.U_restr.ndim != 2 or self.U_restr.shape[0] != self.m:
+                raise ValueError(
+                    f"U_restr must have shape (m, q) with first dim == m={self.m}, got {self.U_restr.shape}."
+                )
+
+        # Validate PE order target if used
+        if self.PE_r is not None and self.PE_r <= 0:
+            raise ValueError("PE_r must be a positive integer if provided.")
+
 
 @dataclass
 class RunMeta:
