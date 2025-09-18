@@ -1,4 +1,5 @@
 import numpy as np
+from scipy import linalg as sla
 
 def c2d(A,B,dt):
     n,m = B.shape
