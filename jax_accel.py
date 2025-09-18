@@ -1,5 +1,13 @@
 from __future__ import annotations
 from typing import Optional, Tuple
+from functools import partial
+
+
+import os
+if os.environ.get("JAX_PLATFORM_NAME","").lower() == "metal":
+    os.environ.setdefault("JAX_ENABLE_X64", "0")
+else:
+    os.environ.setdefault("JAX_ENABLE_X64", "1")
 
 import jax
 import jax.numpy as jnp
@@ -89,6 +97,7 @@ def krylov_generator(A: jnp.ndarray, X: jnp.ndarray, depth: Optional[int] = None
     d = n if depth is None else int(depth)
     return _krylov(A, X, d)
 
+@partial(jax.jit, static_argnames=("mode","r"))
 def unified_generator(A: jnp.ndarray,
                       B: jnp.ndarray,
                       x0: jnp.ndarray,
@@ -111,32 +120,44 @@ def unified_generator(A: jnp.ndarray,
 
     elif mode == "pointwise":
         assert W is not None, "W required for pointwise mode"
-        # Project onto span(W): BW = B @ (W W^+) where W^+ is pseudo-inverse
-        W = jnp.asarray(W, dtype=jnp.float64)
-        Winv = jnp.linalg.pinv(W)
-        BW = B @ (W @ Winv)
+        # Project onto span(W) via QR projector (more stable than pinv)
+        QW, _ = jnp.linalg.qr(jnp.asarray(W, dtype=jnp.float64), mode="reduced")
+        BW = B @ (QW @ QW.T)
         Kcore = jnp.concatenate([x0, BW], axis=1)
         K = _krylov(A, Kcore, A.shape[0])
 
     elif mode == "moment-pe":
         assert r is not None and r >= 1
         Kcore = jnp.concatenate([x0, B], axis=1)
-        K1 = _krylov(A, Kcore, max(0, r-1))
-        # Tail A^r x0 ... A^{n-1} x0
-        tail_cols = []
-        vec = x0
-        for _ in range(r):
-            vec = A @ vec
-        for _ in range(r, A.shape[0]):
-            tail_cols.append(vec)
-            vec = A @ vec
-        K2 = jnp.concatenate(tail_cols, axis=1) if tail_cols else jnp.zeros((A.shape[0], 0), dtype=A.dtype)
+        K1 = _krylov(A, Kcore, max(0, r - 1))
+        x_r = jnp.linalg.matrix_power(A, int(r)) @ x0
+        K2 = _krylov(A, x_r, int(A.shape[0]) - int(r)) if r < A.shape[0] else jnp.zeros((A.shape[0], 0), dtype=A.dtype)
         K = jnp.concatenate([K1, K2], axis=1)
 
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
     return K
+
+
+def _apowers_on_x0(A, x0, start, stop):
+    # returns [A^start x0, ..., A^(stop-1) x0] as a list-like stack
+    n = A.shape[0]
+    def body(carry, _):
+        v, cols = carry
+        cols = cols.append(v)  # use an explicit concatenation pattern below
+        return (A @ v, cols)
+    # start by advancing to A^start x0
+    v0 = x0
+    v0 = lax.fori_loop(0, start, lambda i, v: A @ v, v0)
+    # now collect stop-start columns
+    def push(acc, v): return jnp.concatenate([acc, v], axis=1)
+    cols0 = jnp.zeros((n,0), dtype=A.dtype)
+    v_end, cols = lax.fori_loop(0, stop-start,
+                                lambda i, c: (A @ c[0], (A @ c[0], push(c[1], c[0]))),
+                                (v0, cols0))
+    return cols  # (n, stop-start)
+
 
 # ---------------------------
 # Thin basis from a generator
@@ -181,48 +202,39 @@ def _householder_orth_complement(v: jnp.ndarray) -> jnp.ndarray:
     Q = H[:, 1:]
     return Q
 
-def pbh_margin_structured(A: jnp.ndarray,
-                          B: jnp.ndarray,
-                          x0: jnp.ndarray,
-                          eigvals: Optional[jnp.ndarray] = None,
-                          mode_for_K: str = "unrestricted",
-                          W: Optional[jnp.ndarray] = None,
-                          r: Optional[int] = None) -> jnp.ndarray:
-    """
-    Structured Frobenius distance to PBH failure with x0 fixed:
-        min_{λ∈eig(A)} σ_min( Q^T [ λI - A, [x0 B_*] ] )
-    where Q columns span x0^⊥ and B_* depends on `mode_for_K` (unified generator core).
-    Returns the scalar min over λ.
-    """
+
+@partial(jax.jit, static_argnames=("mode_for_K","r"))
+def pbh_margin_structured(A, B, x0, eigvals=None, mode_for_K="unrestricted", W=None, r=None):
     A, B, x0 = _to_f64(A, B, x0)
     n = A.shape[0]
-    if eigvals is None:
-        eigvals = jnp.linalg.eigvals(A)
+    eigvals = jnp.linalg.eigvals(A) if eigvals is None else eigvals
 
-    # Build core [x0 B*] as in unified generator (without stacking powers)
-    if mode_for_K == "unrestricted":
+    # Build [x0 B*]
+    if mode_for_K == "unrestricted" or mode_for_K == "moment-pe":
         Bstar = B
     elif mode_for_K == "pointwise":
-        assert W is not None, "W required for pointwise mode"
-        Winv = jnp.linalg.pinv(jnp.asarray(W, dtype=jnp.float64))
-        Bstar = B @ (jnp.asarray(W, dtype=jnp.float64) @ Winv)
-    elif mode_for_K == "moment-pe":
-        # Core is still [x0 B]; moment-pe affects the *generator*, not PBH pencil directly
-        Bstar = B
+        QW, _ = jnp.linalg.qr(jnp.asarray(W, dtype=A.dtype), mode="reduced")
+        Bstar = B @ (QW @ QW.T)
     else:
-        raise ValueError(f"Unknown mode_for_K: {mode_for_K}")
+        raise ValueError
 
-    aug = jnp.concatenate([x0.reshape(-1,1), Bstar], axis=1)  # (n, 1+m)
-    Q = _householder_orth_complement(x0)                      # (n, n-1)
+    aug = jnp.concatenate([x0.reshape(-1,1), Bstar], axis=1)
+    Q = _householder_orth_complement(x0)
 
+    def _smin_realfield(QM):
+        H = QM.conj().T @ QM
+        Hr = jnp.block([[jnp.real(H), -jnp.imag(H)],
+    +                    [jnp.imag(H),  jnp.real(H)]])
+        lam_min = jnp.linalg.eigvalsh(Hr)[0]
+        return jnp.sqrt(jnp.maximum(lam_min, 0.0))
+    
     def smin_for_lambda(lam):
-        M = jnp.concatenate([lam * jnp.eye(n) - A, aug], axis=1).astype(jnp.complex128)
-        S = jnp.linalg.svd(Q.T @ M, compute_uv=False)
-        # S is complex; use real magnitude
-        return jnp.min(jnp.real(S))
+        M  = jnp.concatenate([lam * jnp.eye(n) - A, aug], axis=1).astype(jnp.complex64)
+        QM = Q.T @ M
+        return _smin_realfield(QM)
 
-    smins = jax.vmap(smin_for_lambda)(eigvals)
-    return jnp.min(smins)
+    return jax.vmap(smin_for_lambda)(eigvals).min()
+
 
 # ---------------------------
 # JAX DMDc (optional)
@@ -255,3 +267,12 @@ def dmdc_fit_jax(X: jnp.ndarray,
     Ahat = AB[:, :n]
     Bhat = AB[:, n:]
     return Ahat, Bhat
+
+# ---------------------------
+# JAX utils
+# ---------------------------
+
+def _to_policy_dtype(*xs):
+    use64 = bool(jax.config.read("jax_enable_x64"))
+    dt = jnp.float64 if use64 else jnp.float32
+    return tuple(jnp.asarray(x, dtype=dt) for x in xs)

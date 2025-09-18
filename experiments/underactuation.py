@@ -2,9 +2,9 @@ from __future__ import annotations
 from typing import Iterable, Dict, Any, List
 import numpy as np
 
-from .config import ExpConfig, SolverOpts
-from .run_single import run_single
-from .io_utils import save_csv
+from ..config import ExpConfig, SolverOpts
+from ..run_single import run_single
+from ..io_utils import save_csv
 
 def _flatten(prefix: str, d: Dict[str, Any], out: Dict[str, Any]) -> None:
     for k, v in d.items():

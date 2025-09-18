@@ -33,12 +33,12 @@ class ExpConfig:
 
     # --- Input signal options ---
     signal: Literal["prbs", "multisine"] = "prbs"
-    pe_order_target: int = 12 # desired PE order for the control input                   
+    sigPE: int = 12 # desired PE order for the control input                   
     U_restr: Optional[np.ndarray] = None # pointwise constraint basis W \in R^{m×q}
     PE_r: Optional[int] = None                   # moment-PE (nonlocal) constraint
 
     # --- Identification algorithms ---
-    estimators: Sequence[str] = ("dmdc", "moesp")
+    algs: Sequence[str] = ("dmdc", "moesp")
 
     light: bool = True
 

@@ -8,7 +8,7 @@ from .ensembles import ginibre, sparse_continuous, stable, binary, draw_initial_
 from .signals import prbs, multisine, restrict_pointwise, estimate_pe_order
 from .metrics import (
     cont2discrete_zoh,
-    gramian_ct,
+    gramian_ct_infinite as gramian_ct,
     projected_errors,
     unified_generator as unified_generator_np,  # keep explicit alias
 )
@@ -18,7 +18,7 @@ from .estimators.dmdc import dmdc_fit
 
 # Optional JAX accelerator (fully graceful fallback)
 try:
-    from . import jax_accelerator as jxa
+    from . import jax_accel as jxa
     _JAX_AVAILABLE = True
 except Exception:
     jxa = None
