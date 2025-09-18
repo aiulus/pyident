@@ -35,6 +35,7 @@ def _rowify(result: Dict[str, Any]) -> Dict[str, Any]:
             row[f"est.{name}"] = payload
     return row
 
+
 def sweep_sparsity(
     *,
     n: int = 10,
