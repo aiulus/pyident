@@ -191,9 +191,10 @@ def run_single(cfg: ExpConfig,
         X = _simulate_numpy(Ad, Bd, u, x0)
 
     # --- regression blocks
-    Xtrain = X[:, :-1]
-    Xp     = X[:,  1:]
-    Utrain = u[:-1, :].T  # (m, T-1)
+    Xtrain = X[:, :-1] # (n, T)
+    Xp = X[:,  1:] # (n, T)
+    Utrain = u.T # (m, T)
+
 
     # --- convenience PE estimate (input-based)
     pe_hat = int(estimate_pe_order(u, s_max=cfg.T // 2, tol=1e-8))
@@ -230,7 +231,7 @@ def run_single(cfg: ExpConfig,
     if "dmdc" in algs:
         try:
             if use_jax and _JAX_AVAILABLE and hasattr(jxa, "dmdc_fit_jax"):
-                Ahat, Bhat = jxa.dmdc_fit_jax(Ad, Bd, Xtrain, Xp, Utrain)
+                Ahat, Bhat = jxa.dmdc_fit_jax(Xtrain, Xp, Utrain, rcond=1e-8, ridge=None)
                 Ahat, Bhat = np.asarray(Ahat), np.asarray(Bhat)
             else:
                 Ahat, Bhat = dmdc_fit(Xtrain, Xp, Utrain)

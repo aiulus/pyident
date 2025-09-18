@@ -113,3 +113,5 @@ def moesp_fit(
     y_ts = X.T # (T', n_state) with y = x (full-state)
     Ahat, Bhat, _C = moesp_pi(u_ts, y_ts, s=s, n=n, rcond=rcond)
     return Ahat, Bhat
+
+__all__ = ["moesp"]
