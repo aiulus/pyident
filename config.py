@@ -1,36 +1,45 @@
+# pyident/config.py
+from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Literal, Optional, Sequence, Dict, Any
+import numpy as np
 
 @dataclass
 class SolverOpts:
-    max_iter: int = 200
+    maxit: int = 150
     tol_grad: float = 1e-8
-    tol_f: float = 1e-10
-    num_seeds: int = 16
-    grid_omega: int = 512
-    omega_max_factor: float = 2.0
     random_state: Optional[int] = 0
 
 @dataclass
-class ExperimentConfig:
-    n: int = 5
-    m: int = 5
-    ensemble: str = "ginibre"      
-    density: float = 0.5           
-    scale: float = 1.0
-    horizon_t: float = 5.0
-    dt: float = 0.01
-    u_type: str = "prbs"              
-    pe_order: int = 10 # Better make it a function of n, m
-    contour_grid: int = 80
-    save_plots: bool = False
-    save_pgf: bool = False
-    tags: List[str] = field(default_factory=list)
+class ExpConfig:
+    n: int = 10
+    m: int = 3
+    T: int = 400 # time horizon (number of steps)
+    dt: float = 0.02
+
+    ensemble: Literal["ginibre", "sparse", "stable", "binary"] = "ginibre"
+
+    # --- Sparse-continuous ensemble options ---
+    p_density: float = 0.8                      
+    sparse_which: Literal["A", "B", "both"] = "both" # which matrix to sparsify
+    p_density_A: Optional[float] = None         
+    p_density_B: Optional[float] = None        
+         
+    x0_mode: Literal["gaussian", "rademacher", "ones", "zero"] = "gaussian"
+
+    # --- Input signal options ---
+    signal: Literal["prbs", "multisine"] = "prbs"
+    pe_order_target: int = 12            
+    U_restr: Optional[np.ndarray] = None  # Pointwise input constraints - generator matrix
+    PE_r: Optional[int] = None # PE (nonlocal) constraints - order of excitation
+
+    # --- Identification algorithms --- 
+    estimators: Sequence[str] = ("dmdc", "moesp") 
+
+    light: bool = True # leightweight io toggle                  
 
 @dataclass
 class RunMeta:
-    seed: int = 0
-    n: int = 0
-    m: int = 0
-    ensemble: str = ""
-    density: float = 1.0
+    seed: int
+    version: str = "0.1.0"
+    extra: Dict[str, Any] = field(default_factory=dict)
