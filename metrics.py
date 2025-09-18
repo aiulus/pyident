@@ -199,6 +199,16 @@ def gramian_infinite(A: np.ndarray, B: np.ndarray):
             return None
     return None
 
+def gramian_dt_infinite(A: np.ndarray, K: np.ndarray):
+    """Infinite-horizon DT Gramian if rho(A) < 1; else None."""
+    rho = np.max(np.abs(npl.eigvals(A)))
+    if rho < 1.0 - 1e-8:
+        try:
+            return solve_discrete_lyapunov(A, K @ K.T)
+        except Exception:
+            return None
+    return None
+
 # ====================== PBH margins (to move to pbh.py if desired) ===
 
 def pbh_margin_structured(

@@ -100,6 +100,8 @@ def parse_args():
     pu.add_argument("--seeds", type=str, default="0:50", help="e.g. '0:50' or '0,1,2'")
     pu.add_argument("--algs", type=str, default="dmdc,moesp,dmdc_tls,dmdc_iv")
     pu.add_argument("--out-csv", type=str, default="results_underactuation.csv")
+    pu.add_argument("--use-jax", action="store_true")
+    pu.add_argument("--jax-x64", action="store_true")
 
     # Optional admissibility for the whole sweep
     pu.add_argument("--U_restr_dim", type=int, default=None)
@@ -119,6 +121,8 @@ def parse_args():
     psr.add_argument("--seeds", type=str, default="0:50", help="e.g. '0:50' or '0,1,2'")
     psr.add_argument("--algs", type=str, default="dmdc,moesp,dmdc_tls,dmdc_iv")
     psr.add_argument("--out-csv", type=str, default="results_sparsity.csv")
+    pu.add_argument("--use-jax", action="store_true")
+    pu.add_argument("--jax-x64", action="store_true")
 
     # If no subcommand, fall back to single
     p.set_defaults(cmd="single")
@@ -159,7 +163,21 @@ def main():
             light=True,
         )
         sopts = SolverOpts()
-        out = run_single(cfg, seed=a.seed, sopts=sopts, algs=cfg.algs)
+
+        if a.use_jax:
+            try:
+                from . import jax_accelerator as jxa
+                jxa.enable_x64(bool(a.jax_x64))
+            except Exception:
+                # Fail fast if user explicitly requested JAX but it's missing
+                raise RuntimeError("JAX requested via --use-jax but not available. "
+                                   "Install jax/jaxlib or run without --use-jax.")
+            
+        # Optional: flip JAX x64 if requested
+        if a.use_jax and a.jax_x64:
+            from . import jax_accel as jxa
+            jxa.enable_x64(True)
+        out = run_single(cfg, seed=a.seed, sopts=sopts, algs=cfg.algs, use_jax=a.use_jax)
         print(json.dumps(out, indent=2))
         return
 

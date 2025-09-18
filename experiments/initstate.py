@@ -40,9 +40,10 @@ def _select_ensemble(cfg: ExpConfig, rng: np.random.Generator) -> Tuple[np.ndarr
     if cfg.ensemble == "ginibre":
         return ginibre(cfg.n, cfg.m, rng)
     if cfg.ensemble == "sparse":
-        return sparse_continuous(cfg.n, cfg.m, cfg._density_A, rng,
+        return sparse_continuous(cfg.n, cfg.m, rng,
                                  which=cfg.sparse_which,
-                                 b_density=cfg._density_B if cfg.sparse_which in ("B","both") else None)
+                                 p_density_A=cfg._density_A,
+                                 p_density_B=(cfg._density_B if cfg.sparse_which in ("B","both") else None))
     if cfg.ensemble == "stable":
         return stable(cfg.n, cfg.m, rng)
     if cfg.ensemble == "binary":

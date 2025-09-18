@@ -35,9 +35,9 @@ def rademacher(n: int, m: int, rng: np.random.Generator) -> Tuple[np.ndarray, np
 def sparse_continuous(
     n: int,
     m: int,
-    p_density: float,
     rng: np.random.Generator,
     which: Literal["A", "B", "both"] = "both",
+    p_density: float = 0.5,
     p_density_A: Optional[float] = None,
     p_density_B: Optional[float] = None,
     check_zero_rows: bool = False,
@@ -151,9 +151,10 @@ def sample_system_instance(cfg, rng: np.random.Generator) -> Tuple[np.ndarray, n
         return sparse_continuous(
             n=cfg.n,
             m=cfg.m,
-            p_density_A=cfg._density_A,
             rng=rng,
             which=cfg.sparse_which,
+            p_density=cfg.p_density,
+            p_density_A=cfg._density_A,
             p_density_B=cfg._density_B,
             check_zero_rows=False,
         )

@@ -52,7 +52,7 @@ def _draw_until(ensemble: str, n: int, m: int, pA: float, pB: float, which: str,
         elif ensemble == "stable":
             A, B = stable(n, m, rng)
         elif ensemble == "sparse":
-            A, B = sparse_continuous(n, m, pA, rng, which=which, b_density=pB)
+            A, B = sparse_continuous(n, m, rng, which=which, p_density_A=pA, p_density_B=pB)
         else:
             A, B = binary(n, m, rng)
 

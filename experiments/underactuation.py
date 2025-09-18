@@ -24,8 +24,15 @@ def _rowify(result: Dict[str, Any]) -> Dict[str, Any]:
     ]
     for k in keep:
         row[k] = result.get(k, None)
+
+    row["analysis_mode"] = result.get("analysis_mode", result.get("K_mode"))
+    row["W_dim"]         = result.get("W_dim",         result.get("K_pointwise_q"))
+    row["V_dim"]         = result.get("V_dim",         result.get("K_rank"))
+    row["pbh_struct"]    = result.get("pbh_struct",    result.get("delta_pbh"))
+    row["gram_min_ct"]   = result.get("gram_min_ct",   result.get("gram_min"))
+    
     # Estimator metrics flattened
-    est = result.get("algs", {})
+    est = result.get("estimators", result.get("algs", {}))
     for name, payload in est.items():
         if isinstance(payload, dict):
             for kk, vv in payload.items():

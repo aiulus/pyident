@@ -218,12 +218,19 @@ def run_single(cfg: ExpConfig,
     delta_pbh = _pbh_margin_min_sigma(A, K, use_jax=use_jax)
 
     # --- CT Gramian W (only if A is Hurwitz); returns None otherwise
+    gram_min = None
     try:
-        Kcore = np.concatenate([x0.reshape(-1, 1), B], axis=1)
-        Wct = gramian_ct(A, Kcore)
-        gram_min = None if Wct is None else float(np.linalg.eigvalsh(Wct).min())
+        Kcore_ct = np.concatenate([x0.reshape(-1, 1), B], axis=1)
+        Wct = gramian_ct(A, Kcore_ct)
+        if Wct is not None:
+            gram_min = float(np.linalg.eigvalsh(Wct).min())
+        else:
+            from .metrics import gramian_dt_infinite
+            Kcore_dt = np.concatenate([x0.reshape(-1, 1), Bd], axis=1)
+            Wdt = gramian_dt_infinite(Ad, Kcore_dt)
+            if Wdt is not None:
+                gram_min = float(np.linalg.eigvalsh(Wdt).min())
     except Exception:
-        Wct = None
         gram_min = None
 
     # --- Estimators & projected errors on span(K)
