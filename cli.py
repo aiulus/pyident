@@ -70,6 +70,12 @@ def _add_common_single_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--algs", type=str, default="dmdc,moesp",
                    help="Comma-separated list, e.g. 'dmdc,moesp,dmdc_tls,dmdc_iv'.")
+    
+    # JAX toggles
+    p.add_argument("--use-jax", action="store_true",
+                   help="Use JAX accelerator for simulation/metrics/LS.")
+    p.add_argument("--jax-x64", action="store_true",
+                   help="Enable float64 in JAX (recommended).")
 
 
 def parse_args():

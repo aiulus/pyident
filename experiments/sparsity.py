@@ -1,4 +1,3 @@
-# pyident/experiments.py
 from __future__ import annotations
 from typing import Iterable, Dict, Any, List
 import numpy as np
@@ -19,14 +18,14 @@ def _rowify(result: Dict[str, Any]) -> Dict[str, Any]:
     row: Dict[str, Any] = {}
     keep = [
         "seed","n","m","T","dt","ensemble","signal",
-        "pe_order_target","pe_block_hat","pe_moment_hat",
+        "sigPE","pe_block_hat","pe_moment_hat",
         "analysis_mode","W_dim","PE_r","K_rank","V_dim",
         "pbh_struct","pbh_unstruct","gram_min_ct","gram_min_dt",
     ]
     for k in keep:
         row[k] = result.get(k, None)
     # Estimator metrics flattened
-    est = result.get("estimators", {})
+    est = result.get("algs", {})
     for name, payload in est.items():
         if isinstance(payload, dict):
             for kk, vv in payload.items():
@@ -45,11 +44,15 @@ def sweep_sparsity(
     dt: float = 0.05,
     sparse_which: str = "both",
     signal: str = "prbs",
-    pe_order_target: int = 12,
+    sigPE: int = 12,
     seeds: Iterable[int] = range(50),
-    estimators=("dmdc","moesp","dmdc_tls","dmdc_iv"),
+    algs=("dmdc","moesp","dmdc_tls","dmdc_iv"),
     out_csv: str = "results_sparsity.csv",
+    use_jax: bool = False, jax_x64: bool = True,
 ) -> None:
+    if use_jax:
+        import jax_accel as jxa
+        jxa.enable_x64(bool(jax_x64))
     rows: List[Dict[str, Any]] = []
     sopts = SolverOpts()
     for p in p_values:
@@ -60,11 +63,11 @@ def sweep_sparsity(
                 p_density=p,
                 sparse_which=sparse_which,
                 signal=signal,
-                pe_order_target=pe_order_target,
-                estimators=estimators,
+                sigPE=sigPE,
+                algs=algs,
                 light=True,
             )
-            res = run_single(cfg, seed=seed, sopts=sopts, estimators=estimators)
+            res = run_single(cfg, seed=seed, sopts=sopts, algs=algs)
             row = _rowify(res)
             row["tag"] = "sparsity"
             row["p_density"] = p

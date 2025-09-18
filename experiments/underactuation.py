@@ -46,7 +46,11 @@ def sweep_underactuation(
     seeds: Iterable[int] = range(50),
     algs=("dmdc","moesp","dmdc_tls","dmdc_iv"),
     out_csv: str = "results_underactuation.csv",
+    use_jax: bool = False, jax_x64: bool = True,
 ) -> None:
+    if use_jax:
+        import jax_accel as jxa
+        jxa.enable_x64(bool(jax_x64))
     rows: List[Dict[str, Any]] = []
     sopts = SolverOpts()
     for m in m_values:
