@@ -66,6 +66,7 @@ def sweep_underactuation(
     algs=("dmdc","moesp","dmdc_tls","dmdc_iv"),
     out_csv: str = "results_underactuation.csv",
     use_jax: bool = False, jax_x64: bool = True,
+    x0_mode: str | None = None,
 ) -> None:
 
     if use_jax:
@@ -80,6 +81,7 @@ def sweep_underactuation(
                 ensemble=ensemble,
                 signal=signal,
                 sigPE=sigPE,
+                x0_mode=(x0_mode or "gaussian"), 
                 U_restr=None, PE_r=None,
                 algs=algs,
                 light=True,

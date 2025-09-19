@@ -67,6 +67,8 @@ def sweep_sparsity(
     algs=("dmdc","moesp","dmdc_tls","dmdc_iv"),
     out_csv: str = "results_sparsity.csv",
     use_jax: bool = False, jax_x64: bool = True,
+    x0_mode: str | None = None,
+    U_restr_dim: int | None = None,
 ) -> None:
 
     if use_jax:
@@ -82,8 +84,10 @@ def sweep_sparsity(
                 sparse_which=sparse_which,   # "A","B","both"
                 p_density=(p if sparse_which in ("A","both") else 1.0),
                 p_density_B=p if sparse_which in ("B","both") else None,
+                x0_mode=(x0_mode or "gaussian"),
                 signal=signal,
                 sigPE=sigPE,
+                U_restr=U_restr,  
                 algs=algs,
                 light=True,
             )

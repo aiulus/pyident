@@ -85,7 +85,6 @@ def _add_common_single_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--jax-platform", type=str, choices=["cpu","metal","auto"],
                 default="auto",
                 help="Force JAX backend (cpu or metal). 'auto' keeps JAX defaults.")
-    p.add_argument("--jax-platform", choices=["cpu","metal","auto"], default="auto")
     
     # ---- Gradient DMDc options ----
     p.add_argument("--gd-steps", type=int, default=None,
@@ -132,6 +131,10 @@ def parse_args():
     pu.add_argument("--sigPE", type=int, default=12)
     pu.add_argument("--seeds", type=str, default="0:50", help="e.g. '0:50' or '0,1,2'")
     pu.add_argument("--algs", type=str, default="dmdc,moesp,dmdc_tls,dmdc_iv")
+    pu.add_argument("--x0-mode", type=str, default=None,
+                choices=["gaussian","rademacher","ones","zero"],
+                help="Initial state policy (use 'zero' to remove homogeneous contribution).")
+
     pu.add_argument("--out-csv", type=str, default="results_underactuation.csv")
 
     # Optional admissibility for the whole sweep
@@ -140,6 +143,7 @@ def parse_args():
 
     pu.add_argument("--use-jax", action="store_true")
     pu.add_argument("--jax-x64", action="store_true")
+    pu.add_argument("--jax-platform", choices=["cpu","metal","auto"], default="auto")
 
 
     # -------- sweep-sparsity --------
@@ -162,6 +166,12 @@ def parse_args():
 
     psr.add_argument("--use-jax", action="store_true")
     psr.add_argument("--jax-x64", action="store_true")
+    psr.add_argument("--jax-platform", choices=["cpu","metal","auto"], default="auto")
+
+    psr.add_argument("--x0-mode", type=str, default=None,
+                 choices=["gaussian","rademacher","ones","zero"])
+    psr.add_argument("--U_restr_dim", type=int, default=None,
+                    help="If set, restrict inputs to span of first q basis vectors.")
 
 
     # If no subcommand, fall back to single
@@ -273,6 +283,7 @@ def main():
             out_csv=a.out_csv,
             use_jax=a.use_jax,
             jax_x64=a.jax_x64,
+            x0_mode=a.x0_mode,
         )
 
         print(f"Wrote {a.out_csv}")
@@ -308,6 +319,8 @@ def main():
             out_csv=a.out_csv,
             use_jax=a.use_jax,
             jax_x64=a.jax_x64,
+            x0_mode=a.x0_mode,
+            U_restr_dim=a.U_restr_dim,
         )
 
         print(f"Wrote {a.out_csv}")
