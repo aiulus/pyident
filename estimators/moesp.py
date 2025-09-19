@@ -1,6 +1,6 @@
 import numpy as np
 from typing import Tuple, Optional, Dict, Any        
-from ..logging.tolerances import TolerancePolicy             
+from ..loggers.tolerances import TolerancePolicy             
 
 
 def _block_hankel(z: np.ndarray, s: int, start: int, cols: int) -> np.ndarray:

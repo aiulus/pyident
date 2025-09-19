@@ -85,6 +85,7 @@ def _add_common_single_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--jax-platform", type=str, choices=["cpu","metal","auto"],
                 default="auto",
                 help="Force JAX backend (cpu or metal). 'auto' keeps JAX defaults.")
+    p.add_argument("--jax-platform", choices=["cpu","metal","auto"], default="auto")
     
     # ---- Gradient DMDc options ----
     p.add_argument("--gd-steps", type=int, default=None,
@@ -179,10 +180,8 @@ def _build_U_restr(m: int, q: int | None) -> np.ndarray | None:
 def main():
     a = parse_args()
     import os
-    # Must set platform BEFORE any module imports jax
-    if getattr(a, "use_jax", False) and getattr(a, "jax_platform", None) in ("cpu", "metal"):
+    if getattr(a, "use_jax", False) and getattr(a, "jax_platform", None) in ("cpu","metal"):
         os.environ["JAX_PLATFORM_NAME"] = a.jax_platform
-
 
     if a.cmd == "single":
         # Build U_restr if requested (canonical subspace spanned by first q basis vectors)
