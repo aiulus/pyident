@@ -107,6 +107,11 @@ def _add_common_single_args(p: argparse.ArgumentParser) -> None:
                    help="If set, write the single-run JSON to this path instead of printing.")
     p.add_argument("--light", action="store_true",
                    help="Light result mode: omit heavy arrays to save disk.")
+    p.add_argument("--out-json", "--out_json",
+                    dest="out_json",
+                    type=str, default=None,
+                    help="Write the result JSON to this path (directories auto-created).")
+
     
 
 
@@ -252,8 +257,11 @@ def main():
         print(f"[pyident] JAX backend: {out['env'].get('accelerator')}  x64={out['env'].get('jax_x64')}")
         if a.json_out:
             from .io_utils import save_json
-            save_json(out, a.json_out)
-            print(f"Wrote {a.json_out}")
+            import sys
+            os.makedirs(os.path.dirname(a.out_json) or ".", exist_ok=True)
+            with open(a.out_json, "w") as f:
+                json.dump(out, f, indent=2)
+            print(f"Wrote {a.out_json}", file=sys.stderr)
         else:
             print(json.dumps(out, indent=2))
         return
