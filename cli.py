@@ -1,10 +1,13 @@
 from __future__ import annotations
 import argparse
 import json
-import os
 import numpy as np
-
 from .config import ExpConfig, SolverOpts
+
+import os
+os.environ.setdefault("JAX_PLATFORM_NAME", "cpu")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+
 
 # ------------------------
 # small parsing utilities
@@ -231,6 +234,7 @@ def main():
             jax_x64=a.jax_x64,
             light=a.light,
         )
+        print(f"[pyident] JAX backend: {out['env'].get('accelerator')}  x64={out['env'].get('jax_x64')}")
         if a.json_out:
             from .io_utils import save_json
             save_json(out, a.json_out)
