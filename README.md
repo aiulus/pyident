@@ -9,9 +9,16 @@ pyident/
     __init__.py
     dmdc.py
     moesp.py            #  simple MOESP/N4SID
+    gradient_based.py
+  experiments/
+    initstate.py
+    PEorder.py
+    sparsity.py
+    underactuation.py
   io_utils.py           # JSON/CSV/NPZ writers, “light” toggle, version capture
   plots.py              # sigma_min contours, rank bars, histograms, PGF export
   run_single.py         # run_single(cfg, seed, sopts, estimators=[...])
   cli.py                # argparse entry point
-  jax_accelerator.py          
+  jax_accel.py
+  sys_utils.py
 ```
