@@ -1,3 +1,4 @@
+##### Ovewview
 ```
 pyident/
   __init__.py
@@ -22,4 +23,12 @@ pyident/
   cli.py                # argparse entry point
   jax_accel.py
   sys_utils.py
+```
+##### Examples
+###### 1) Single run:
+```
+python -m pyident.cli single --n 6 --m 2 --T 120 --dt 0.05 \
+  --ensemble ginibre --signal prbs --sigPE 12 \
+  --algs dmdc --seed 0 \
+  --out-json runs/single_dense.json
 ```
