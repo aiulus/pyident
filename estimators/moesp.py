@@ -49,20 +49,25 @@ def moesp_fullstate(
     else:
         Xtil = Xfo
 
-    # SVD → dominant subspace (extended observability)
+    # SVD --> dominant subspace (extended observability)
     U1, S1, V1t = np.linalg.svd(Xtil, full_matrices=False)
     rel = S1 / (S1[0] if S1.size else 1.0)
     r = int((rel > rcond).sum())
     if r < n:
         raise ValueError(f"MOESP: subspace rank {r} < n={n}. Increase T or adjust i/f.")
 
-    Un = U1[:, :n]                        # (n*f, n)
-    # Recover A via shift-invariance across f blocks
-    # Un partition: [Gamma; Gamma A; ...; Gamma A^{f-1}] (stacked by n-rows)
-    rows = n
-    Un_top = Un[: (f-1)*rows, :]
-    Un_bot = Un[rows : f*rows, :]
-    Ahat = np.linalg.lstsq(Un_top, Un_bot, rcond=rcond)[0]
+    # Build extended observability with sqrt(S) scaling
+    Gamma = U1[:, :n] @ np.diag(np.sqrt(S1[:n]))   # shape (n*f, n)
+    rows = x.shape[1]  # = n = p (full state)
+    # shift-invariance on Gamma
+    Gamma_up   = Gamma[: (f-1)*rows, :]
+    Gamma_down = Gamma[rows : f*rows, :]
+    A_subsp = np.linalg.lstsq(Gamma_up, Gamma_down, rcond=rcond)[0]  # (n, n)
+
+    # Align to state basis via first block row Chat = Gamma[:p,:] (here p = n)
+    Chat = Gamma[:rows, :]                 # (n, n), invertible up to numeric tol
+    Tinv = np.linalg.pinv(Chat, rcond=rcond)
+    Ahat = Chat @ A_subsp @ Tinv           # now in the state basis
 
     # With full state, B is best recovered by a robust LS on the original relation:
     # X_plus = Ahat X_minus + B U_minus
@@ -71,10 +76,8 @@ def moesp_fullstate(
     U_minus = u[:-1].T    # (m, T-1)
     Z = np.vstack([X_minus, U_minus])      # (n+m, T-1)
     Theta = X_plus @ Z.T @ np.linalg.pinv(Z @ Z.T, rcond=rcond)  # (n, n+m)
-    Ahat_ls = Theta[:, :n]
-    Bhat_ls = Theta[:, n:]
-    # Optionally blend Ahat (subspace) with Ahat_ls; by default trust subspace A
-    Bhat = Bhat_ls
+    # Use aligned A in the residual for B
+    Bhat = (X_plus - Ahat @ X_minus) @ U_minus.T @ np.linalg.pinv(U_minus @ U_minus.T, rcond=rcond)
     return Ahat, Bhat
 
 # Backward-compatible wrapper 

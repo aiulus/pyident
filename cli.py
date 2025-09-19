@@ -115,10 +115,10 @@ def parse_args():
                      help="Comma list of densities (0..1).")
     psr.add_argument("--T", type=int, default=400)
     psr.add_argument("--dt", type=float, default=0.05)
-    p.add_argument("--sparse-which", "--sparse_which",
-               dest="sparse_which",
-               type=str, default="both",
-               choices=["A", "B", "both"])
+    psr.add_argument("--sparse-which", "--sparse_which",
+                     dest="sparse_which",
+                     type=str, default="both",
+                     choices=["A", "B", "both"])
     psr.add_argument("--signal", type=str, default="prbs", choices=["prbs", "multisine"])
     psr.add_argument("--sigPE", type=int, default=12)
     psr.add_argument("--seeds", type=str, default="0:50", help="e.g. '0:50' or '0,1,2'")
@@ -165,14 +165,12 @@ def main():
         )
         sopts = SolverOpts()
 
-        try:
-            from . import jax_accel as jxa
-            jxa.enable_x64(bool(a.jax_x64))
-        except Exception:
-            raise RuntimeError(
-                "JAX requested via --use-jax but not available. "
-                "Install jax/jaxlib or run without --use-jax."
-            )
+        if a.use_jax:
+            try:
+                from . import jax_accel as jxa
+                jxa.enable_x64(bool(a.jax_x64))
+            except Exception:
+                raise RuntimeError("JAX requested via --use-jax but not available. ...")
         
         out = run_single(cfg, seed=a.seed, sopts=sopts, algs=cfg.algs, use_jax=a.use_jax)
         print(json.dumps(out, indent=2))
