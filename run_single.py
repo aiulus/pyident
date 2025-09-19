@@ -2,6 +2,7 @@
 from __future__ import annotations
 import numpy as np
 from typing import Dict, Any, Sequence
+import inspect
 
 from .config import ExpConfig, SolverOpts
 from .ensembles import ginibre, sparse_continuous, stable, binary, draw_initial_state
@@ -9,6 +10,7 @@ from .signals import prbs, multisine, restrict_pointwise, estimate_pe_order
 from .metrics import (
     cont2discrete_zoh,
     gramian_ct_infinite as gramian_ct,
+    gramian_dt_finite as gramian_dt,
     projected_errors,
     unified_generator as unified_generator_np,  # keep explicit alias
 )
@@ -236,6 +238,49 @@ def run_single(cfg: ExpConfig,
     except Exception:
         gram_min = None
 
+    # --- Gramian (CT if Hurwitz; else DT if rho(Ad) < 1)
+    Kcore_ct = np.concatenate([x0.reshape(-1, 1), B], axis=1)
+    Kcore_dt = np.concatenate([x0.reshape(-1, 1), Bd], axis=1)
+
+    gram_min = None
+    gram_mode = "none"
+    spec = {}
+
+    Wct = gramian_ct(A, Kcore_ct)
+    if Wct is not None:
+        try:
+            gram_min = float(np.linalg.eigvalsh(Wct).min())
+            gram_mode = "CT"
+            spec["ct_max_real"] = float(np.max(np.real(np.linalg.eigvals(A))))
+        except Exception:
+            pass
+        try:
+            spec["dt_rho"] = float(np.max(np.abs(np.linalg.eigvals(Ad))))
+        except Exception:
+            pass
+    else:
+        Wdt = None
+        used_finite = False
+        try:
+            # Try infinite-horizon: signature (Ad, K)
+            Wdt = gramian_dt(Ad, Kcore_dt)
+            gram_mode = "DT-infinite"
+        except TypeError:
+            # Fall back to finite-horizon: signature (Ad, K, T)
+            Wdt = gramian_dt(Ad, Kcore_dt, int(cfg.T))
+            gram_mode = "DT-finite"
+            spec["dt_T"] = int(cfg.T)
+            used_finite = True
+        if Wdt is not None:
+            gram_min = float(np.linalg.eigvalsh(Wdt).min())
+            # Always report spectral radius for context
+            try:
+                dt_rho = float(np.max(np.abs(np.linalg.eigvals(Ad))))
+                spec["dt_rho"] = dt_rho
+                if dt_rho >= 1.0 and used_finite:
+                    spec["warning"] = "DT unstable (rho>=1); reported Gramian is finite-horizon."
+            except Exception:
+                pass
     # --- Estimators & projected errors on span(K)
     results_est: Dict[str, Any] = {}
 
@@ -272,6 +317,8 @@ def run_single(cfg: ExpConfig,
         "sigPE": cfg.sigPE, "pe_order_hat": pe_hat,
         "K_rank": K_rank, "delta_pbh": float(delta_pbh),
         "gram_min": gram_min,
+        "gram_mode": gram_mode,   
+        "spec": spec,
         "estimators": results_est,
         # Optional: flags documenting the analytical mode used for K
         "K_mode": mode,

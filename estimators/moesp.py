@@ -64,7 +64,7 @@ def moesp_fullstate(
     Gamma_down = Gamma[rows : f*rows, :]
     A_sub = np.linalg.lstsq(Gamma_up, Gamma_down, rcond=rcond)[0]  # (n, n)
 
-    # Align to state basis via first block row (C=I ⇒ T = first block row of Gamma)
+    # Align to state basis via first block row (C=I --> T = first block row of Gamma)
     T = Gamma[:rows, :]                              # (n, n)
     Tinv = np.linalg.pinv(T, rcond=rcond)
     Ahat = T @ A_sub @ Tinv                          # state-basis A

@@ -199,15 +199,23 @@ def gramian_infinite(A: np.ndarray, B: np.ndarray):
             return None
     return None
 
-def gramian_dt_infinite(A: np.ndarray, K: np.ndarray):
-    """Infinite-horizon DT Gramian if rho(A) < 1; else None."""
-    rho = np.max(np.abs(npl.eigvals(A)))
+
+def gramian_dt_infinite(A_d: np.ndarray, K: np.ndarray):
+    """
+    Infinite-horizon DT controllability Gramian for x_{k+1} = A_d x_k + K w_k.
+    Returns None if spectral radius >= 1 or solver fails.
+    """
+    try:
+        rho = float(np.max(np.abs(npl.eigvals(A_d))))
+    except Exception:
+        rho = np.inf
     if rho < 1.0 - 1e-8:
         try:
-            return solve_discrete_lyapunov(A, K @ K.T)
+            return solve_discrete_lyapunov(A_d, K @ K.T)
         except Exception:
             return None
     return None
+
 
 # ====================== PBH margins (to move to pbh.py if desired) ===
 

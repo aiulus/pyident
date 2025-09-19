@@ -133,6 +133,18 @@ def stable(
     B = rng.standard_normal((n, m))
     return A, B
 
+def stable_continuous(n, m, rng, lam_min=0.2, lam_max=1.5):
+    """
+    Strictly Hurwitz A with a spectral margin (all eigenvalues <= -lam_min), and random B.
+    """
+    # Orthonormal basis
+    Q, _ = np.linalg.qr(rng.standard_normal((n, n)))
+    # Draw negative eigenvalues with margin
+    lam = lam_min + rng.uniform(0.0, lam_max - lam_min, size=n)
+    A = - (Q @ np.diag(lam) @ Q.T)   # symmetric negative-definite ⇒ Hurwitz with margin >= lam_min
+    # B: standard normal
+    B = rng.standard_normal((n, m))
+    return A, B
 
 # ---------------------------------------------------------------------
 # Convenience adapter used by run_single / CLI
