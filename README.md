@@ -15,6 +15,7 @@ pyident/
     PEorder.py
     sparsity.py
     underactuation.py
+  loggers/              # Functions that help produce detailed traceback files
   io_utils.py           # JSON/CSV/NPZ writers, “light” toggle, version capture
   plots.py              # sigma_min contours, rank bars, histograms, PGF export
   run_single.py         # run_single(cfg, seed, sopts, estimators=[...])
