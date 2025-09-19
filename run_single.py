@@ -14,9 +14,9 @@ from .metrics import (
     projected_errors,
     unified_generator as unified_generator_np,  # keep explicit alias
 )
-from .loggers.runtime_banner import runtime_banner
-from .loggers.tolerances import TolerancePolicy
-from .loggers.ledger import start_ledger, attach_tolerances, log_approx, log_warning
+from .logging.runtime_banner import runtime_banner
+from .logging.tolerances import TolerancePolicy
+from .logging.ledger import start_ledger, attach_tolerances, log_approx, log_warning
 
 
 # Estimators (DMDc directly; MOESP imported lazily below)
@@ -92,7 +92,7 @@ def _basis_from_K_np(K: np.ndarray) -> np.ndarray:
         # empty basis, zero-rank
         return np.zeros((K.shape[0], 0))
     U, S, _ = np.linalg.svd(K, full_matrices=False)
-    from .loggers.tolerances import TolerancePolicy
+    from .logging.tolerances import TolerancePolicy
     tol = TolerancePolicy()
     r = tol.rank_from_singulars(S)
     return U[:, :r]
@@ -143,7 +143,7 @@ def _pbh_margin_min_sigma(A: np.ndarray,
 
     # NumPy fallback
     lam = np.linalg.eigvals(A)
-    from .loggers.tolerances import TolerancePolicy
+    from .logging.tolerances import TolerancePolicy
     tol = TolerancePolicy()
     lam = tol.cluster_eigs(lam)
     n = A.shape[0]
@@ -161,8 +161,8 @@ def _pbh_margin_min_sigma(A: np.ndarray,
 def run_single(cfg: ExpConfig,
                seed: int,
                sopts: SolverOpts,
-               algs: Sequence[str] = ("dmdc", "moesp"),
-               use_jax: bool = False) -> Dict[str, Any]:
+               algs: Sequence[str] = ("dmdc", "moesp"), estimators=None, # old name for 'algs; - temporary fix
+               use_jax: bool = False, jax_x64: bool = False, light: bool = False):
     """
     Run one experiment instance:
       1) draw (A,B), x0, generate u(t)
@@ -178,6 +178,19 @@ def run_single(cfg: ExpConfig,
       - PBH “distance to failure” is reported as min_λ σ_min([λI-A, K]); this matches the structured
         test when K is the unified generator (with x0 fixed).
     """
+    if use_jax and jax_x64:
+        try:
+            from . import jax_accel as _jxa
+            _jxa.enable_x64(True)
+        except Exception:
+            pass
+
+    if algs is None and estimators is not None:
+        algs = estimators
+    if algs is None and hasattr(cfg, "algs") and cfg.algs:
+        algs = cfg.algs
+
+
     # --- ledger & tolerances
     _ledger = start_ledger()
     _tol = TolerancePolicy()
@@ -202,7 +215,19 @@ def run_single(cfg: ExpConfig,
             # Use 64-bit for reproducible & stable linear algebra
             jxa.enable_x64(True)
         if hasattr(jxa, "simulate_discrete"):
-            X = np.asarray(jxa.simulate_discrete(Ad, Bd, u, x0))  # (n, T+1)
+            try:
+                X = np.asarray(jxa.simulate_discrete(Ad, Bd, u, x0))  # (n, T+1)
+            except Exception as e:
+                # Metal/StableHLO issues or unsupported ops --> fall back to NumPy
+                from .logging.ledger import log_warning
+                log_warning(_ledger, f"JAX simulate_discrete failed: {type(e).__name__}: {e}. Falling back to NumPy.")
+                # NumPy fallback (no jit): x_{k+1} = Ad x_k + Bd u_k
+                n, T = Ad.shape[0], u.shape[1]
+                Xnp = np.empty((n, T+1), dtype=Ad.dtype)
+                Xnp[:,0] = x0
+                for k in range(T):
+                    Xnp[:,k+1] = Ad @ Xnp[:,k] + Bd @ u[:,k]
+                X = Xnp
         else:
             # Graceful fallback
             X = _simulate_numpy(Ad, Bd, u, x0)
@@ -366,4 +391,5 @@ def run_single(cfg: ExpConfig,
         "K_mode": mode,
         "K_pointwise_q": None if Wmat is None else int(Wmat.shape[1]),
         "K_PE_r": r,
+        "light": bool(light),
     }

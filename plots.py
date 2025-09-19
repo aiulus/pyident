@@ -457,3 +457,4 @@ def plot_with_band(x: np.ndarray, y_mean: np.ndarray, y_lo: np.ndarray, y_hi: np
     fig.tight_layout()
     fig.savefig(out_png, dpi=200); fig.savefig(out_pdf)
     plt.close(fig)
+

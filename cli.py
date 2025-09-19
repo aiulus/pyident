@@ -83,6 +83,9 @@ def _add_common_single_args(p: argparse.ArgumentParser) -> None:
                    help="Use JAX accelerator for simulation/metrics/LS.")
     p.add_argument("--jax-x64", action="store_true",
                    help="Enable float64 in JAX (recommended).")
+    p.add_argument("--jax-platform", type=str, choices=["cpu","metal","auto"],
+                default="auto",
+                help="Force JAX backend (cpu or metal). 'auto' keeps JAX defaults.")
     
     # ---- Gradient DMDc options ----
     p.add_argument("--gd-steps", type=int, default=None,
@@ -105,7 +108,7 @@ def _add_common_single_args(p: argparse.ArgumentParser) -> None:
                    help="If set, write the single-run JSON to this path instead of printing.")
     p.add_argument("--light", action="store_true",
                    help="Light result mode: omit heavy arrays to save disk.")
-
+    
 
 
 def parse_args():
@@ -212,6 +215,9 @@ def main():
 
         if a.use_jax:
             try:
+                import os
+                if a.use_jax and a.jax_platform in ("cpu","metal"):
+                    os.environ["JAX_PLATFORM_NAME"] = a.jax_platform
                 from . import jax_accel as jxa
                 jxa.enable_x64(bool(a.jax_x64))
             except Exception:

@@ -172,7 +172,7 @@ def save_manifest(manifest: Dict[str, Any], path: str) -> None:
 ################
 
 import platform
-from .runtime_banner import runtime_banner
+from .logging.runtime_banner import runtime_banner
 
 def ensure_dir(path: str) -> None:
     if path and not os.path.exists(path):
