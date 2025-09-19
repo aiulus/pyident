@@ -139,7 +139,13 @@ def dmdc_gd_fit(
         lr = 0.9 / L if L > 0 else 1e-2
 
     # Initial loss
-    init_loss, _, _ = _loss_and_grads_np(A, B, X, Xp, U, lam)
+    # init_loss, _, _ = _loss_and_grads_np(A, B, X, Xp, U, lam)
+    init_loss, gA0, gB0 = _loss_and_grads_np(A, B, X, Xp, U, lam)
+    best_A, best_B = A.copy(), B.copy()
+    best_loss = float(init_loss)
+    best_t = 0
+    early_stop = False
+
 
     # --- NumPy optimizer (default) ---
     used_jax = False
@@ -181,6 +187,10 @@ def dmdc_gd_fit(
 
         for t in range(1, steps + 1):
             gA, gB = grad_fn((Aj, Bj))
+            gnorm = float(jnp.maximum(jnp.linalg.norm(gA), jnp.linalg.norm(gB)))
+            if gnorm < 1e-12 * (1.0 + float(jnp.linalg.norm(Aj)) + float(jnp.linalg.norm(Bj))):
+                early_stop = True
+                break
             if optimizer.lower() == "adam":
                 mA = 0.9 * mA + 0.1 * gA
                 vA = 0.999 * vA + 0.001 * (gA * gA)
@@ -206,6 +216,28 @@ def dmdc_gd_fit(
                 if did:
                     proj_count += 1
                     Aj = jnp.asarray(A_host)
+            def _loss_only(Ak, Bk):
+                Rj = Ak @ Xj + Bk @ Uj - Xpj
+                scale = 1.0 / max(Tm1, 1)
+                return float(scale * jnp.sum(Rj * Rj) + lamj * (jnp.sum(Ak * Ak) + jnp.sum(Bk * Bk)))
+
+            cur_loss = _loss_only(Aj, Bj)
+            if cur_loss < best_loss:
+                best_loss = cur_loss
+                best_t = t
+                best_A = np.array(Aj)
+                best_B = np.array(Bj)
+
+                A = np.array(Aj)
+        B = np.array(Bj)
+        final_loss, _, _ = _loss_and_grads_np(A, B, X, Xp, U, lam)
+
+        # Safeguard: if we got worse than our best, revert
+        reverted_to_best = False
+        if best_loss < final_loss * (1.0 - 1e-12):
+            A, B = best_A, best_B
+            final_loss = best_loss
+            reverted_to_best = True
 
         A = np.array(Aj)
         B = np.array(Bj)
@@ -228,6 +260,10 @@ def dmdc_gd_fit(
 
         for t in range(1, steps + 1):
             loss, gA, gB = _loss_and_grads_np(A, B, X, Xp, U, lam)
+            gnorm = max(np.linalg.norm(gA), np.linalg.norm(gB))
+            if gnorm < 1e-12 * (1.0 + np.linalg.norm(A) + np.linalg.norm(B)):
+                early_stop = True
+                break
             if optimizer == "adam":
                 # Adam update A
                 mA = beta1 * mA + (1.0 - beta1) * gA
@@ -254,6 +290,21 @@ def dmdc_gd_fit(
                 if _project_dt_stable_inplace(A, rho_max=dt_rho):
                     proj_count += 1
 
+            # ---- Track best iterate by loss
+            cur_loss, _, _ = _loss_and_grads_np(A, B, X, Xp, U, lam)
+            if cur_loss < best_loss:
+                best_loss = float(cur_loss)
+                best_t = t
+                best_A = A.copy()
+                best_B = B.copy()
+                final_loss, _, _ = _loss_and_grads_np(A, B, X, Xp, U, lam)
+
+        reverted_to_best = False
+        if best_loss < final_loss * (1.0 - 1e-12):
+            A, B = best_A, best_B
+            final_loss = best_loss
+            reverted_to_best = True
+
         final_loss, _, _ = _loss_and_grads_np(A, B, X, Xp, U, lam)
 
     diag = {
@@ -269,6 +320,11 @@ def dmdc_gd_fit(
         "stable_proj_count": int(proj_count),
         "rcond": float(rcond),
         "smaxZ": float(smaxZ),
+        "grad_norm_init": float(max(np.linalg.norm(gA0), np.linalg.norm(gB0))),
+        "early_stop": bool(early_stop),
+        "reverted_to_best": bool(reverted_to_best),
+        "best_iter": int(best_t),
+
     }
     return A, B, diag
 
