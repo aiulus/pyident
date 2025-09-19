@@ -312,6 +312,7 @@ def run_single(cfg: ExpConfig,
         from .estimators.gradient_based import dmdc_gd_fit as gd_fit
         Ahat, Bhat, diag = gd_fit(Xtrain, Xp, Utrain,
                                 steps=getattr(sopts, "gd_steps", 200),
+                                rcond=getattr(sopts, "rcond", 1e-10),
                                 rcond=sopts.rcond,
                                 lr=getattr(sopts, "gd_lr", None),
                                 optimizer=getattr(sopts, "gd_opt", "adam"),
