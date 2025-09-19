@@ -22,7 +22,7 @@ def dmdc_fit(
     Options (numerical relaxations)
     -------
     rank : if set, use truncated-SVD pseudoinverse of Z with this rank.
-    ridge: if set, Tikhonov λ (solves (Z Z.T + λ I)^{-1}).
+    ridge: if set, Tikhonov λ (solves (Z Z.T + lambda I)^{-1}).
 
     Returns
     -------
@@ -141,7 +141,7 @@ def dmdc_iv_fit(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     IV-DMDc (instrumental variables): Y ≈ Θ X with instruments W uncorrelated with measurement noise.
-    Here Y=Xp, X=[X;U]. We choose W from *past* data (lag ≥ 1) to suppress bias.
+    Here Y=Xp, X=[X;U]. We choose W from *past* data (lag >= 1) to suppress bias.
 
     Construction
     -----------
@@ -161,27 +161,70 @@ def dmdc_iv_fit(
     Bhat : (n, m)
     """
     n = X.shape[0]
-    Z = np.vstack([X, U])     # (n+m, N)
+    Z = np.vstack([X, U])    
     N = Z.shape[1]
     if lag < 1 or lag >= N:
         raise ValueError(f"lag must be in [1, N-1]. Got lag={lag}, N={N}.")
 
-    Xc = Z[:, lag:]           # (n+m, N-L)
-    Yc = Xp[:, lag:]          # (n,   N-L)
-    W  = np.vstack([X[:, :-lag], U[:, :-lag]])  #
+    Xc = Z[:, lag:]           
+    Yc = Xp[:, lag:]          
+    W  = np.vstack([X[:, :-lag], U[:, :-lag]])  
 
     # Instruments should have shape (k × (N-L)). Above, X has shape (n×N), U (m×N),
     # so W results in (n+m) × (N-L) as desired.
     assert W.shape[1] == Xc.shape[1]
 
-    YW = Yc @ W.T            # (n × (n+m))
-    XW = Xc @ W.T            # ((n+m) × (n+m))
+    YW = Yc @ W.T            
+    XW = Xc @ W.T           
 
     # Θ = YW @ (XW)^+
     # Solve via lstsq to avoid explicit pseudoinverse.
     Theta_T, *_ = np.linalg.lstsq(XW.T, YW.T, rcond=rcond)  # solves XW.T Θ.T ~~ YW.T
     AB = Theta_T.T
 
+    Ahat = AB[:, :n]
+    Bhat = AB[:, n:]
+    return Ahat, Bhat
+
+def dmdc_tls_fit(X: np.ndarray, Xp: np.ndarray, U: np.ndarray,
+                 rcond: float = 1e-10, rank: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
+    """Total Least Squares DMDc (Augmented SVD). Robust to isotropic noise in Z and Y."""
+    n = X.shape[0]
+    Z = np.vstack([X, U])    # (n+m, N)
+    Y = Xp                   # (n, N)
+    M = np.vstack([Z, Y])    # (n+m+n, N)
+    Usvd, Ssvd, Vt = np.linalg.svd(M, full_matrices=False)
+    if rank is None:
+        rank = min(M.shape) - 1
+    Vt_used = Vt[:rank, :]
+    p = Z.shape[0]; q = Y.shape[0]
+    V = Vt_used.T
+    V12 = V[:p, p:p+q]
+    V22 = V[p:p+q, p:p+q]
+    Theta_T, *_ = np.linalg.lstsq(V22.T, (-V12).T, rcond=rcond)  # Θ = -V12 V22^{-1}
+    AB = Theta_T.T
+    Ahat = AB[:, :n]
+    Bhat = AB[:, n:]
+    return Ahat, Bhat
+
+
+def dmdc_iv_fit(X: np.ndarray, Xp: np.ndarray, U: np.ndarray,
+                L: int = 1, rcond: float = 1e-10) -> Tuple[np.ndarray, np.ndarray]:
+    """Instrumental Variables DMDc (lag-L instruments)."""
+    n = X.shape[0]; m = U.shape[0]
+    Z = np.vstack([X, U])           # (n+m, N)
+    Y = Xp                           # (n, N)
+    N = Z.shape[1]
+    if N <= L:
+        raise ValueError("Not enough samples for IV with lag L")
+    Xc = Z[:, L:]                    # (n+m, N-L)
+    Yc = Y[:, L:]
+    Zlag = np.vstack([X[:, :-L], U[:, :-L]])  # (n+m, N-L)
+    W = Zlag.T                       # (N-L, n+m) instruments
+    YW = Yc @ W
+    XW = Xc @ W
+    Theta_T, *_ = np.linalg.lstsq(XW.T, YW.T, rcond=rcond)
+    AB = Theta_T.T
     Ahat = AB[:, :n]
     Bhat = AB[:, n:]
     return Ahat, Bhat

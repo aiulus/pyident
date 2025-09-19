@@ -123,6 +123,14 @@ def dmdc_gd_fit(
                      "steps","lipschitz_L","used_jax",
                      "stable_proj_count","stable_proj_mode", ... }
     """
+    # JAX dtype policy
+    if use_jax and _JAX_AVAILABLE and jax_x64:
+        try:
+            from jax import config as _jax_config  # type: ignore
+            _jax_config.update("jax_enable_x64", True)
+        except Exception:
+            pass
+        
     rng = np.random.default_rng(seed)
     n, Tm1 = X.shape
     m = U.shape[0]
@@ -297,13 +305,12 @@ def dmdc_gd_fit(
                 best_B = B.copy()
                 final_loss, _, _ = _loss_and_grads_np(A, B, X, Xp, U, lam)
 
-        reverted_to_best = False
-        if best_loss < final_loss * (1.0 - 1e-12):
-            A, B = best_A, best_B
-            final_loss = best_loss
-            reverted_to_best = True
+                reverted_to_best = False
+                if best_loss < final_loss * (1.0 - 1e-12):
+                    A, B = best_A, best_B
+                    final_loss = best_loss
+                    reverted_to_best = True
 
-        final_loss, _, _ = _loss_and_grads_np(A, B, X, Xp, U, lam)
 
     diag = {
         "init_loss": float(init_loss),
