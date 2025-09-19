@@ -145,7 +145,7 @@ def dmdc_gd_fit(
     best_loss = float(init_loss)
     best_t = 0
     early_stop = False
-
+    final_loss = float(init_loss)
 
     # --- NumPy optimizer (default) ---
     used_jax = False
@@ -239,8 +239,6 @@ def dmdc_gd_fit(
             final_loss = best_loss
             reverted_to_best = True
 
-        A = np.array(Aj)
-        B = np.array(Bj)
         final_loss, _, _ = _loss_and_grads_np(A, B, X, Xp, U, lam)
 
     else:
