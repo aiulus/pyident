@@ -174,7 +174,17 @@ def moesp_pi(
     return Ahat, Bhat, Chat
 
 
-def moesp_fit(
+def moesp_fit(X, Xp, U, *, s: int, n: int, rcond: float = 1e-10):
+     Ahat, _B_unused = _moesp_core(U, X, n=n, s=s, rcond=rcond)
+     # Robust, alignment-safe B refit on the original sequence:
+     Xk = X[:, :-1]
+     Xp = X[:, 1:]
+     Uk = U[:, :-1]
+     Bhat = (Xp - Ahat @ Xk) @ np.linalg.pinv(Uk, rcond=rcond)
+     return Ahat, Bhat
+
+
+def moesp_fit_old(
     X: np.ndarray,
     Xp: np.ndarray,
     U: np.ndarray,
