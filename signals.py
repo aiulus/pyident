@@ -1,5 +1,6 @@
 from __future__ import annotations
 import numpy as np
+import math
 from typing import Tuple, Optional
 from .loggers.tolerances import TolerancePolicy
 
@@ -59,18 +60,6 @@ def hankel_blocks(u: np.ndarray, s: int) -> np.ndarray:
         raise ValueError("Not enough samples for requested Hankel depth.")
     H = [u[i:i + cols].T for i in range(s)]  # each (m×cols)
     return np.vstack(H)  # (s*m × cols)
-
-def _moment_map(u: np.ndarray, r: int, t_scale: float = 1.0) -> np.ndarray:
-    """
-    Discrete-time 'moments' of u with polynomial basis phi_k(t) = (t/t_scale)^k.
-    Returns M in R^{r x m} with M[k,:] = sum_t phi_k(t) * u[t,:]
-    """
-    T, m = u.shape
-    t = np.arange(T, dtype=float) / float(t_scale if t_scale != 0 else 1.0)
-    Phi = np.stack([t**k for k in range(r)], axis=1)  # (T, r)
-    # least-squares moment map (can also do direct sum with weights)
-    M = Phi.T @ u   # (r, m)
-    return M
 
 
 def estimate_pe_order_block(u: np.ndarray, s_max: int, tol: float = 1e-8) -> int:
@@ -134,34 +123,34 @@ def _moment_map_old(u: np.ndarray, r: int, t0: Optional[int], dt: float = 1.0) -
     return out
 
 
-def estimate_moment_pe_order(
-    u: np.ndarray,
-    r_max: int,
-    t0: Optional[int] = None,
-    dt: float = 1.0,
-    tol: float = 1e-10,
-) -> int:
-    """Return the largest r such that the moment map has full range on the span
-    of provided inputs (single input sequence -> rank test over stacked psi_k).
+def _moment_map(u: np.ndarray, r: int, t0: Optional[int] = None, dt: float = 1.0) -> np.ndarray:
+    T, m = u.shape                    # we use time-major: (T, m)
+    if r <= 0:
+        raise ValueError("r must be positive.")
+    if t0 is None:
+        t0 = T - 1
+    if not (0 <= t0 < T):
+        raise ValueError(f"t0 must be in [0, T-1], got {t0} for T={T}.")
+    s = np.arange(t0 + 1, dtype=float)
+    w = np.empty((r, t0 + 1), dtype=float)
+    for k in range(r):
+        denom = math.factorial(k) if k <= 20 else math.exp(math.lgamma(k+1))
+        w[k, :] = ((t0 - s) ** k) / denom
+    M = (w * dt) @ u[:t0+1, :]        # (r × m)
+    return M.reshape(-1, order="C")   # stack ψ_k blocks of size m
 
-    Implementation detail: with a *single* input realization, we test if the stacked
-    vector [psi_0; ...; psi_{r-1}] is non-degenerate up to `tol`. For multiple inputs,
-    stack across realizations before testing rank.
-    """
-    T, m = u.shape
-    r_max_eff = max(1, min(r_max, T))
-    # With a single realization, “full range” reduces to growing, non-degenerate stack.
-    # We check the norm grows in a numerically stable way; for more realizations,
-    # users should pass a (R×T×m) array and compute a proper rank.
-    best = 0
+def estimate_moment_pe_order(u: np.ndarray, r_max: int, t0: Optional[int] = None,
+                             dt: float = 1.0, tol: float = 1e-10) -> int:
+    T, _ = u.shape
+    r_max_eff = max(1, min(int(r_max), T))
+    best, prev = 0, 0.0
     for r in range(1, r_max_eff + 1):
-        v = _moment_map(u, r, t0=t0, dt=dt)
-        if np.linalg.norm(v) > tol:
-            best = r
+        nv = float(np.linalg.norm(_moment_map(u, r, t0=t0, dt=dt)))
+        if nv > tol and nv >= prev * (1 - 1e-12):
+            best, prev = r, nv
         else:
             break
     return best
-
 
 # ------------------ Pointwise restriction ----------------------------
 

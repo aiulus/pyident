@@ -162,15 +162,12 @@ def gramian_ct_infinite(A: np.ndarray, K: np.ndarray) -> Optional[np.ndarray]:
 
 
 def gramian_dt_finite(A: np.ndarray, K: np.ndarray, T: int) -> np.ndarray:
-    """Discrete-time finite-horizon reachability Gramian:
-         W_T = sum_{k=0}^{T-1} A^k K K^T (A^T)^k
-    Always well-defined for finite T.
-    """
     n = A.shape[0]
-    W = np.zeros((n, n))
-    Ak = np.eye(n)
-    for _ in range(T):
-        W += Ak @ (K @ K.T) @ Ak.T
+    W = np.zeros((n, n), dtype=float)
+    Ak = np.eye(n, dtype=float)
+    KKt = K @ K.T
+    for _ in range(int(T)):
+        W += Ak @ KKt @ Ak.T
         Ak = A @ Ak
     return W
 
@@ -260,31 +257,20 @@ def pbh_margin_unstructured(
     return float(margin)
 
 
-def pbh_margin_with_ring(
-    A: np.ndarray,
-    K: np.ndarray,
-    ring_eps: float = 1e-6,
-    ring_pts: int = 8,
-) -> float:
-    """Optional robustness: sample small complex ring around each eigenvalue.
-
-    Disclaimer: this *heuristic* addresses near-defective A
-    where evaluating exactly at eigenvalues can be misleading numerically.
-    """
-    evals = npl.eigvals(A)
+def pbh_margin_with_ring(A: np.ndarray, K: np.ndarray,
+                         ring_eps: float = 1e-6, ring_pts: int = 8) -> float:
+    lam = np.linalg.eigvals(A)
     n = A.shape[0]
     margin = np.inf
-    for lam in evals:
-        # include the eigenvalue itself
-        candidates = [lam]
-        # ring samples
-        angles = np.linspace(0, 2 * np.pi, num=ring_pts, endpoint=False)
-        candidates += list(lam + ring_eps * (np.cos(angles) + 1j * np.sin(angles)))
-        for z in candidates:
-            M = np.concatenate([z * np.eye(n) - A, K], axis=1).astype(np.complex128)
-            smin = npl.svd(M, compute_uv=False).min().real
+    for l in lam:
+        for t in range(ring_pts):
+            theta = 2*np.pi*(t/ring_pts)
+            lam_s = l + ring_eps*(np.cos(theta) + 1j*np.sin(theta))
+            M = np.concatenate([lam_s*np.eye(n) - A, K], axis=1).astype(np.complex128)
+            smin = np.linalg.svd(M, compute_uv=False).min().real
             margin = min(margin, float(smin))
     return float(margin)
+
 
 
 # ====================== Overlaps / errors ============================

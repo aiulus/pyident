@@ -17,9 +17,13 @@ from jax import lax
 # Global toggles / utilities
 # ---------------------------
 
-def enable_x64(enable: bool = True) -> None:
-    """Enable/disable JAX float64."""
-    jax.config.update("jax_enable_x64", bool(enable))
+def enable_x64(flag: bool = True) -> None:
+    try:
+        from jax import config as _jax_config
+        _jax_config.update("jax_enable_x64", bool(flag))
+    except Exception:
+        pass
+
 
 def _to_f64(*xs):
     return tuple(jnp.asarray(x, dtype=jnp.float64) for x in xs)
@@ -276,14 +280,6 @@ def _to_policy_dtype(*xs):
     use64 = bool(jax.config.read("jax_enable_x64"))
     dt = jnp.float64 if use64 else jnp.float32
     return tuple(jnp.asarray(x, dtype=dt) for x in xs)
-
-def enable_x64(flag: bool) -> None:
-    """Idempotently enable/disable JAX x64 (safe to call even if JAX absent)."""
-    try:
-        from jax import config as _jax_config
-        _jax_config.update("jax_enable_x64", bool(flag))
-    except Exception:
-        pass  # fall back on environment defaults
 
 def backend_info() -> dict:
     try:
