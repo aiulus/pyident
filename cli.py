@@ -145,6 +145,12 @@ def parse_args():
     pu.add_argument("--jax-x64", action="store_true")
     pu.add_argument("--jax-platform", choices=["cpu","metal","auto"], default="auto")
 
+    pu.add_argument("--sparse-which", "--sparse_which", dest="sparse_which",
+                type=str, default="B", choices=["A","B","both"])
+    pu.add_argument("--p_density_B", type=float, default=0.1,
+                    help="If ensemble=sparse and sparse_which includes B, set B's density.")
+
+
 
     # -------- sweep-sparsity --------
     psr = sub.add_parser("sweep-sparsity", help="Sweep over sparsity levels.")

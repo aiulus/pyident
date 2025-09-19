@@ -67,6 +67,8 @@ def sweep_underactuation(
     out_csv: str = "results_underactuation.csv",
     use_jax: bool = False, jax_x64: bool = True,
     x0_mode: str | None = None,
+    sparse_which: str = "B",         
+    p_density_B: float | None = None, 
 ) -> None:
 
     if use_jax:
@@ -82,6 +84,8 @@ def sweep_underactuation(
                 signal=signal,
                 sigPE=sigPE,
                 x0_mode=(x0_mode or "gaussian"), 
+                sparse_which=sparse_which if ensemble == "sparse" else "both",
+                p_density_B=p_density_B if ensemble == "sparse" else None,
                 U_restr=None, PE_r=None,
                 algs=algs,
                 light=True,
