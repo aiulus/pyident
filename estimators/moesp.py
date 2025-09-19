@@ -160,16 +160,16 @@ def moesp_pi(
     Gamma_down = Gamma[p:,  :]  # rows p..(s-1)*p
     Ahat = np.linalg.lstsq(Gamma_up, Gamma_down, rcond=rcond)[0]  # (n, n)
 
-    # Reconstruct state sequence X_f from Gamma_s
-    Xf = np.linalg.lstsq(Gamma, Ytil, rcond=rcond)[0] # (n, cols_projected) 
+    # Reconstruct state sequence X_f from Gamma_s (optional diagnostic)
+    Xf = np.linalg.lstsq(Gamma, Ytil, rcond=rcond)[0]  # (n, N_eff)
 
-    # Align to estimate B: use the first block-row of Uf (u_k) aligned with Xk
-    Xk  = Xf[:, :-1]
-    Xk1 = Xf[:,  1:]
-    Uf_proj = (Uf @ V2) # (s*m, cols - rank_u)
-    Uk = Uf_proj[:m, :-1] # u_k aligned with Xk
-    resid = Xk1 - Ahat @ Xk
-    Bhat = resid @ np.linalg.pinv(Uk, rcond=rcond)
+    # Estimate B from the original (unprojected) time series:
+    # x_{k+1} = A_hat x_k + B u_k  -->  B = (X+ - A_hat X-) U-^T (U- U-^T)^+
+    X_minus = y[:-1, :].T   # (n, T-1)
+    X_plus  = y[1:,  :].T   # (n, T-1)
+    U_minus = u[:-1, :].T   # (m, T-1)
+    resid = X_plus - Ahat @ X_minus
+    Bhat = resid @ U_minus.T @ np.linalg.pinv(U_minus @ U_minus.T, rcond=rcond)
 
     return Ahat, Bhat, Chat
 
@@ -203,9 +203,15 @@ def moesp_fit(
         n = n_state
 
     # Rebuild time series (T' samples)
-    u_ts = U.T # (T', m)
-    y_ts = X.T # (T', n_state) with y = x (full-state)
-    Ahat, Bhat, _C = moesp_pi(u_ts, y_ts, s=s, n=n, rcond=rcond)
-    return Ahat, Bhat
+    u_ts = U.T  # (T', m)
+    y_ts = X.T  # (T', n_state) with y = x (full-state)
+    Ahat, Bhat, Chat = moesp_pi(u_ts, y_ts, s=s, n=n, rcond=rcond)
+    # Basis alignment: true C = I, estimated Chat ≈ Q
+    T = Chat
+    # use pseudoinverse for numerical safety
+    Tinv = np.linalg.pinv(T, rcond=rcond)
+    A_aligned = T @ Ahat @ Tinv
+    B_aligned = T @ Bhat
+    return A_aligned, B_aligned
 
 __all__ = ["moesp"]

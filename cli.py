@@ -46,7 +46,9 @@ def _add_common_single_args(p: argparse.ArgumentParser) -> None:
                    choices=["ginibre", "sparse", "stable", "binary"])
     p.add_argument("--p_density", type=float, default=0.8,
                    help="Nonzero fraction for A (and B if sparse_which='both' and p_density_B unset).")
-    p.add_argument("--sparse_which", type=str, default="both",
+    p.add_argument("--sparse-which", "--sparse_which",
+                   dest="sparse_which",
+                   type=str, default="both",
                    choices=["A", "B", "both"])
     p.add_argument("--p_density_B", type=float, default=None,
                    help="Optional B density (if sparse_which includes B).")
@@ -100,8 +102,6 @@ def parse_args():
     pu.add_argument("--seeds", type=str, default="0:50", help="e.g. '0:50' or '0,1,2'")
     pu.add_argument("--algs", type=str, default="dmdc,moesp,dmdc_tls,dmdc_iv")
     pu.add_argument("--out-csv", type=str, default="results_underactuation.csv")
-    pu.add_argument("--use-jax", action="store_true")
-    pu.add_argument("--jax-x64", action="store_true")
 
     # Optional admissibility for the whole sweep
     pu.add_argument("--U_restr_dim", type=int, default=None)
@@ -121,8 +121,6 @@ def parse_args():
     psr.add_argument("--seeds", type=str, default="0:50", help="e.g. '0:50' or '0,1,2'")
     psr.add_argument("--algs", type=str, default="dmdc,moesp,dmdc_tls,dmdc_iv")
     psr.add_argument("--out-csv", type=str, default="results_sparsity.csv")
-    pu.add_argument("--use-jax", action="store_true")
-    pu.add_argument("--jax-x64", action="store_true")
 
     # If no subcommand, fall back to single
     p.set_defaults(cmd="single")
