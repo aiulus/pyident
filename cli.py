@@ -264,6 +264,11 @@ def main():
             print(f"Wrote {a.out_json}", file=sys.stderr)
         else:
             print(json.dumps(out, indent=2))
+            if a.out_json:
+                import os, json as _json
+                os.makedirs(os.path.dirname(a.out_json), exist_ok=True)
+                with open(a.out_json, "w") as f:
+                    _json.dump(out, f, indent=2)
         return
 
 
