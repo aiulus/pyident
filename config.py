@@ -9,8 +9,18 @@ import numpy as np
 class SolverOpts:
     """Generic nonlinear solver options."""
     maxit: int = 150
-    tol_grad: float = 1e-8
+    tol_grad: float = 1e-10
     random_state: Optional[int] = 0
+
+    rcond: float = 1e-10
+
+    # gradient estimator defaults 
+    gd_steps: int = 200
+    gd_lr: Optional[float] = None
+    gd_opt: str = "adam"            # "adam" or "sgd"
+    gd_ridge: Optional[float] = None
+    gd_project: Optional[str] = None  # None | "ct" | "dt"
+    gd_proj_params: Optional[Dict[str, float]] = None
 
 
 @dataclass
