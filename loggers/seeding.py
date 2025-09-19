@@ -11,3 +11,4 @@ class SeedPolicy:
             self.jax_key = jax.random.PRNGKey(self.seed)  # type: ignore
         except Exception:
             self.jax_key = None
+
