@@ -1,4 +1,4 @@
-# pyident/infra/__init__.py
+# pyident/loggers/__init__.py
 from .runtime_banner import runtime_banner
 from .tolerances import TolerancePolicy
 from .ledger import start_ledger, attach_tolerances, log_approx, log_warning
