@@ -290,6 +290,8 @@ def main():
             use_jax=a.use_jax,
             jax_x64=a.jax_x64,
             x0_mode=a.x0_mode,
+            sparse_which=a.sparse_which,
+            p_density_B=a.p_density_B
         )
 
         print(f"Wrote {a.out_csv}")
