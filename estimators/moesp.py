@@ -56,18 +56,18 @@ def moesp_fullstate(
     if r < n:
         raise ValueError(f"MOESP: subspace rank {r} < n={n}. Increase T or adjust i/f.")
 
-    # Build extended observability with sqrt(S) scaling
-    Gamma = U1[:, :n] @ np.diag(np.sqrt(S1[:n]))   # shape (n*f, n)
-    rows = x.shape[1]  # = n = p (full state)
-    # shift-invariance on Gamma
+    # Extended observability with sqrt(S) scaling
+    Gamma = U1[:, :n] @ np.diag(np.sqrt(S1[:n]))    # (p*f, n); here p = n (full state)
+    rows = x.shape[1]                                # p = n
+    # Shift-invariance on Gamma
     Gamma_up   = Gamma[: (f-1)*rows, :]
     Gamma_down = Gamma[rows : f*rows, :]
-    A_subsp = np.linalg.lstsq(Gamma_up, Gamma_down, rcond=rcond)[0]  # (n, n)
+    A_sub = np.linalg.lstsq(Gamma_up, Gamma_down, rcond=rcond)[0]  # (n, n)
 
-    # Align to state basis via first block row Chat = Gamma[:p,:] (here p = n)
-    Chat = Gamma[:rows, :]                 # (n, n), invertible up to numeric tol
-    Tinv = np.linalg.pinv(Chat, rcond=rcond)
-    Ahat = Chat @ A_subsp @ Tinv           # now in the state basis
+    # Align to state basis via first block row (C=I ⇒ T = first block row of Gamma)
+    T = Gamma[:rows, :]                              # (n, n)
+    Tinv = np.linalg.pinv(T, rcond=rcond)
+    Ahat = T @ A_sub @ Tinv                          # state-basis A
 
     # With full state, B is best recovered by a robust LS on the original relation:
     # X_plus = Ahat X_minus + B U_minus
@@ -75,8 +75,9 @@ def moesp_fullstate(
     X_plus  = x[1:].T     # (n, T-1)
     U_minus = u[:-1].T    # (m, T-1)
     Z = np.vstack([X_minus, U_minus])      # (n+m, T-1)
-    Theta = X_plus @ Z.T @ np.linalg.pinv(Z @ Z.T, rcond=rcond)  # (n, n+m)
-    # Use aligned A in the residual for B
+
+    Theta = X_plus @ Z.T @ np.linalg.pinv(Z @ Z.T, rcond=rcond)    # (n, n+m)
+    # Refit B using the aligned A
     Bhat = (X_plus - Ahat @ X_minus) @ U_minus.T @ np.linalg.pinv(U_minus @ U_minus.T, rcond=rcond)
     return Ahat, Bhat
 
