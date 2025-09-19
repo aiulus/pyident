@@ -68,7 +68,7 @@ def sweep_sparsity(
     out_csv: str = "results_sparsity.csv",
     use_jax: bool = False, jax_x64: bool = True,
     x0_mode: str | None = None,
-    U_restr_dim: int | None = None,
+    U_restr: int | None = None,
 ) -> None:
 
     if use_jax:
