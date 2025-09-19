@@ -218,16 +218,29 @@ def run_single(cfg: ExpConfig,
             try:
                 X = np.asarray(jxa.simulate_discrete(Ad, Bd, u, x0))  # (n, T+1)
             except Exception as e:
-                # Metal/StableHLO issues or unsupported ops --> fall back to NumPy
                 from .logging.ledger import log_warning
                 log_warning(_ledger, f"JAX simulate_discrete failed: {type(e).__name__}: {e}. Falling back to NumPy.")
-                # NumPy fallback (no jit): x_{k+1} = Ad x_k + Bd u_k
-                n, T = Ad.shape[0], u.shape[1]
+                # NumPy fallback: x_{k+1} = Ad x_k + Bd u_k
+                n = Ad.shape[0]
+                m = Bd.shape[1]
+                # Determine orientation of u: (m, T) or (T, m)
+                if u.ndim != 2:
+                    raise ValueError(f"u must be 2D, got shape {u.shape}")
+                if u.shape[0] == m:          # (m, T)
+                    T = u.shape[1]
+                    get_u = lambda k: u[:, k]
+                elif u.shape[1] == m:        # (T, m)
+                    T = u.shape[0]
+                    get_u = lambda k: u[k, :]
+                else:
+                    raise ValueError(f"Incompatible u shape {u.shape} for B shape {Bd.shape}")
                 Xnp = np.empty((n, T+1), dtype=Ad.dtype)
-                Xnp[:,0] = x0
+                Xnp[:, 0] = x0
                 for k in range(T):
-                    Xnp[:,k+1] = Ad @ Xnp[:,k] + Bd @ u[:,k]
+                    uk = get_u(k)
+                    Xnp[:, k+1] = Ad @ Xnp[:, k] + Bd @ uk
                 X = Xnp
+
         else:
             # Graceful fallback
             X = _simulate_numpy(Ad, Bd, u, x0)

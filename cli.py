@@ -5,10 +5,6 @@ import os
 import numpy as np
 
 from .config import ExpConfig, SolverOpts
-from .run_single import run_single
-from  .experiments.sparsity import sweep_sparsity
-from .experiments.underactuation import sweep_underactuation 
-
 
 # ------------------------
 # small parsing utilities
@@ -179,6 +175,11 @@ def _build_U_restr(m: int, q: int | None) -> np.ndarray | None:
 
 def main():
     a = parse_args()
+    import os
+    # Must set platform BEFORE any module imports jax
+    if getattr(a, "use_jax", False) and getattr(a, "jax_platform", None) in ("cpu", "metal"):
+        os.environ["JAX_PLATFORM_NAME"] = a.jax_platform
+
 
     if a.cmd == "single":
         # Build U_restr if requested (canonical subspace spanned by first q basis vectors)
@@ -212,17 +213,15 @@ def main():
             gd_proj_params=(json.loads(a.gd_proj_params) if a.gd_proj_params else None),
         )
 
-
         if a.use_jax:
             try:
-                import os
-                if a.use_jax and a.jax_platform in ("cpu","metal"):
-                    os.environ["JAX_PLATFORM_NAME"] = a.jax_platform
                 from . import jax_accel as jxa
                 jxa.enable_x64(bool(a.jax_x64))
             except Exception:
                 raise RuntimeError("JAX requested via --use-jax but not available. ...")
-            
+
+        from .run_single import run_single
+
         out = run_single(
             cfg,
             seed=a.seed,
@@ -232,7 +231,6 @@ def main():
             jax_x64=a.jax_x64,
             light=a.light,
         )
-
         if a.json_out:
             from .io_utils import save_json
             save_json(out, a.json_out)
@@ -249,6 +247,8 @@ def main():
                 jxa.enable_x64(bool(a.jax_x64))
             except Exception:
                 raise RuntimeError("JAX requested via --use-jax but not available.")
+
+        from .experiments.underactuation import sweep_underactuation
 
         m_values = _parse_int_list(a.m_values)
         seeds = _parse_int_list(a.seeds)
@@ -282,6 +282,8 @@ def main():
                 jxa.enable_x64(bool(a.jax_x64))
             except Exception:
                 raise RuntimeError("JAX requested via --use-jax but not available.")
+
+        from .experiments.sparsity import sweep_sparsity
             
         p_values = _parse_float_list(a.p_values)
         seeds = _parse_int_list(a.seeds)
