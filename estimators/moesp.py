@@ -73,14 +73,14 @@ def moesp_fullstate(
     Theta = X_plus @ Z.T @ np.linalg.pinv(Z @ Z.T, rcond=rcond)  # (n, n+m)
     Ahat_ls = Theta[:, :n]
     Bhat_ls = Theta[:, n:]
-    # Blend Ahat (subspace) with Ahat_ls if you want; by default trust subspace A
+    # Optionally blend Ahat (subspace) with Ahat_ls; by default trust subspace A
     Bhat = Bhat_ls
     return Ahat, Bhat
 
-# Backward-compatible wrapper if your module exports `moesp(...)`
+# Backward-compatible wrapper 
 def moesp(U: np.ndarray, X: np.ndarray, n: Optional[int] = None, *, s: Optional[int] = None, rcond: float = 1e-10):
     """
-    Keep your external signature: U: (m,T), X: (n,T) in your code.
+    Keep the external signature: U: (m,T), X: (n,T).
     This wrapper just transposes to time-major and calls moesp_fullstate.
     """
     m, T = U.shape
@@ -126,7 +126,7 @@ def moesp_pi(
     Yf = _block_hankel(y, s, start=s, cols=cols)      # (s*p, cols)
 
      # Project onto orthogonal complement of row(Up) via QR (numerically safer)
-    # This is the PI-MOESP variant; if you later add Yp, use [Up;Yp] here.
+    # PI-MOESP variant
     Qp, _ = np.linalg.qr(Up.T, mode="reduced")     # cols × r
     P_orth = np.eye(Qp.shape[0]) - Qp @ Qp.T       # (cols × cols)
     Yf_perp = Yf @ P_orth
@@ -173,15 +173,30 @@ def moesp_pi(
 
     return Ahat, Bhat, Chat
 
+def moesp_fit(X: np.ndarray, Xp: np.ndarray, U: np.ndarray, *,
+              s: int | None, n: int, rcond: float = 1e-10):
+    """
+    Inputs:
+      X  (n, T)      states  x_k
+      Xp (n, T)      states  x_{k+1} (not strictly needed by MOESP core)
+      U  (m, T)      inputs  u_k
+      s  block rows  (None -> heuristic)
+      n  model order
+    Returns:
+      Ahat, Bhat
+    """
+    if s is None:
+        # conservative default; avoids skinny projections at small T
+        s = max(n, min(12, U.shape[1] // 3))
 
-def moesp_fit(X, Xp, U, *, s: int, n: int, rcond: float = 1e-10):
-     Ahat, _B_unused = _moesp_core(U, X, n=n, s=s, rcond=rcond)
-     # Robust, alignment-safe B refit on the original sequence:
-     Xk = X[:, :-1]
-     Xp = X[:, 1:]
-     Uk = U[:, :-1]
-     Bhat = (Xp - Ahat @ Xk) @ np.linalg.pinv(Uk, rcond=rcond)
-     return Ahat, Bhat
+    Ahat, _ = moesp(U, X, n=n, s=s, rcond=rcond)
+
+    # Always refit B on the aligned one-step relation: X_{k+1} = A X_k + B U_k
+    Xk  = X[:, :-1]
+    Xp1 = X[:,  1:]
+    Uk  = U[:, :-1]
+    Bhat = (Xp1 - Ahat @ Xk) @ np.linalg.pinv(Uk, rcond=rcond)
+    return Ahat, Bhat
 
 
 def moesp_fit_old(
