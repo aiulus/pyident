@@ -100,7 +100,7 @@ def _compute_unified_generator(A: np.ndarray,
                                r: int | None,
                                use_jax: bool) -> tuple[np.ndarray, int, np.ndarray]:
     """
-    Build the unified generator K(U; x0) (paper's core object),
+    Build the unified generator K(U; x0)
     return (K, rank, Vbasis) with Vbasis a thin basis for span(K).
     """
     if use_jax and _JAX_AVAILABLE and hasattr(jxa, "unified_generator"):
@@ -165,9 +165,9 @@ def run_single(cfg: ExpConfig,
     Disclaimer:
       - Gramian (CT infinite-horizon) is computed only if A is Hurwitz; otherwise we report None.
       - Projected errors are evaluated in the discrete-time domain (Ad, Bd), but the projection
-        uses V = span K(U; x0) as defined in the *continuous* model (paper’s definition).
+        uses V = span K(U; x0) as defined in the *continuous* model.
       - PBH “distance to failure” is reported as min_λ σ_min([λI-A, K]); this matches the structured
-        test when K is the paper’s unified generator (with x0 fixed).
+        test when K is the unified generator (with x0 fixed).
     """
     rng = np.random.default_rng(seed)
 
@@ -205,7 +205,7 @@ def run_single(cfg: ExpConfig,
     # --- convenience PE estimate (input-based)
     pe_hat = int(estimate_pe_order(u, s_max=cfg.T // 2, tol=1e-8))
 
-    # --- unified generator mode for analysis (paper’s §4 unified K(U; x0))
+    # --- unified generator mode for analysis 
     mode = "unrestricted"
     Wmat = None
     r = None
@@ -308,6 +308,26 @@ def run_single(cfg: ExpConfig,
             results_est["moesp"] = {"A_err_PV": errA, "B_err_PV": errB}
         except Exception as e:
             results_est["moesp"] = {"error": str(e)}
+    elif "gd_dmdc"in algs:
+        from .estimators.gradient_based import dmdc_gd_fit as gd_fit
+        Ahat, Bhat, diag = gd_fit(X, Xp, U,
+                                steps=getattr(sopts, "gd_steps", 200),
+                                rcond=sopts.rcond,
+                                lr=getattr(sopts, "gd_lr", None),
+                                optimizer=getattr(sopts, "gd_opt", "adam"),
+                                ridge=getattr(sopts, "gd_ridge", None),
+                                project_stable=getattr(sopts, "gd_project", None),
+                                project_params=getattr(sopts, "gd_proj_params", None),
+                                seed=seed,
+                                use_jax=use_jax,
+                                jax_x64=getattr(sopts, "jax_x64", False))
+        errA, errB = projected_errors(Ahat, Bhat, Ad, Bd, Vbasis=Vbasis)
+        results_est["gd_dmdc"] = {
+            "A_err_PV": str(errA),  
+            "B_err_PV": str(errB),
+            "diag": diag,
+        }
+
 
     return {
         "seed": seed,
