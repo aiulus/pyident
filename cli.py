@@ -78,6 +78,22 @@ def _add_common_single_args(p: argparse.ArgumentParser) -> None:
                    help="Use JAX accelerator for simulation/metrics/LS.")
     p.add_argument("--jax-x64", action="store_true",
                    help="Enable float64 in JAX (recommended).")
+    
+    # ---- Gradient DMDc options ----
+    p.add_argument("--gd-steps", type=int, default=None,
+                   help="Number of GD iterations (override SolverOpts default).")
+    p.add_argument("--gd-lr", type=float, default=None,
+                   help="Learning rate; if omitted, set from Lipschitz estimate.")
+    p.add_argument("--gd-opt", type=str, choices=["adam", "sgd"], default=None,
+                   help="Optimizer for GD-DMDc.")
+    p.add_argument("--gd-ridge", type=float, default=None,
+                   help="Ridge λ (if omitted, auto-scaled via rcond).")
+    p.add_argument("--gd-project", type=str, choices=["ct", "dt"], default=None,
+                   help="Project A each step to a stable set: 'ct' (shift-left) or 'dt' (radius scale).")
+    p.add_argument("--gd-proj-params", type=str, default=None,
+                   help='JSON dict for projection params, e.g. {"ct_margin":1e-3,"dt_rho":0.98}.')
+    p.add_argument("--rcond", type=float, default=1e-10,
+                   help="LS pseudoinverse rcond (also sets auto ridge scale).")
 
 
 def parse_args():
@@ -163,7 +179,16 @@ def main():
             algs=tuple(s.strip() for s in a.algs.split(",") if s.strip()),
             light=True,
         )
-        sopts = SolverOpts()
+        sopts = SolverOpts(
+            rcond=a.rcond,
+            gd_steps=(a.gd_steps if a.gd_steps is not None else SolverOpts().gd_steps),
+            gd_lr=a.gd_lr,
+            gd_opt=(a.gd_opt if a.gd_opt is not None else SolverOpts().gd_opt),
+            gd_ridge=a.gd_ridge,
+            gd_project=a.gd_project,
+            gd_proj_params=(json.loads(a.gd_proj_params) if a.gd_proj_params else None),
+        )
+
 
         if a.use_jax:
             try:
