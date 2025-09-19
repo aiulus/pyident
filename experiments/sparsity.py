@@ -68,7 +68,7 @@ def sweep_sparsity(
     out_csv: str = "results_sparsity.csv",
     use_jax: bool = False, jax_x64: bool = True,
     x0_mode: str | None = None,
-    U_restr: int | None = None,
+    U_restr_dim: int | None = None,
 ) -> None:
 
     if use_jax:
@@ -78,6 +78,13 @@ def sweep_sparsity(
     sopts = SolverOpts()
     for p in p_values:
         for seed in seeds:
+            # --- build U_restr (canonical q-dim subspace) if requested ---
+            if U_restr_dim is not None:
+                if U_restr_dim < 1 or U_restr_dim > m:
+                    raise ValueError(f"--U_restr_dim must be in [1, m]={m}, got {U_restr_dim}.")
+                U_restr = np.eye(m, dtype=float)[:, :U_restr_dim]
+            else:
+                U_restr = None
             cfg = ExpConfig(
                 n=n, m=m, T=T, dt=dt,
                 ensemble="sparse",
