@@ -308,9 +308,9 @@ def run_single(cfg: ExpConfig,
             results_est["moesp"] = {"A_err_PV": errA, "B_err_PV": errB}
         except Exception as e:
             results_est["moesp"] = {"error": str(e)}
-    elif "gd_dmdc"in algs:
+    if "gd_dmdc"in algs:
         from .estimators.gradient_based import dmdc_gd_fit as gd_fit
-        Ahat, Bhat, diag = gd_fit(X, Xp, U,
+        Ahat, Bhat, diag = gd_fit(Xtrain, Xp, Utrain,
                                 steps=getattr(sopts, "gd_steps", 200),
                                 rcond=sopts.rcond,
                                 lr=getattr(sopts, "gd_lr", None),
@@ -323,8 +323,8 @@ def run_single(cfg: ExpConfig,
                                 jax_x64=getattr(sopts, "jax_x64", False))
         errA, errB = projected_errors(Ahat, Bhat, Ad, Bd, Vbasis=Vbasis)
         results_est["gd_dmdc"] = {
-            "A_err_PV": str(errA),  
-            "B_err_PV": str(errB),
+            "A_err_PV": float(errA),  
+            "B_err_PV": float(errB),
             "diag": diag,
         }
 
