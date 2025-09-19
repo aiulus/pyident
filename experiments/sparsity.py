@@ -5,6 +5,7 @@ import numpy as np
 from ..config import ExpConfig, SolverOpts
 from ..run_single import run_single
 from ..io_utils import save_csv
+from ..jax_accel import enable_x64            
 
 def _flatten(prefix: str, d: Dict[str, Any], out: Dict[str, Any]) -> None:
     for k, v in d.items():
@@ -30,6 +31,16 @@ def _rowify(result: Dict[str, Any]) -> Dict[str, Any]:
     row["V_dim"]         = result.get("V_dim",         result.get("K_rank"))
     row["pbh_struct"]    = result.get("pbh_struct",    result.get("delta_pbh"))
     row["gram_min_ct"]   = result.get("gram_min_ct",   result.get("gram_min"))
+
+    env = result.get("env", {})
+    row["env.accelerator"] = env.get("accelerator")
+    row["env.jax_x64"]     = env.get("jax_x64")
+
+    led = result.get("notes", {}).get("ledger", {})
+    tol = led.get("tolerances", {}) if isinstance(led, dict) else {}
+    row["tol.svd_rtol"]    = tol.get("svd_rtol")
+    row["tol.svd_atol"]    = tol.get("svd_atol")
+    row["tol.pbh_cluster"] = tol.get("pbh_cluster_tol")
 
     # Estimator metrics flattened
     est = result.get("estimators", result.get("algs", {}))
@@ -57,9 +68,10 @@ def sweep_sparsity(
     out_csv: str = "results_sparsity.csv",
     use_jax: bool = False, jax_x64: bool = True,
 ) -> None:
+
     if use_jax:
-        import jax_accel as jxa
-        jxa.enable_x64(bool(jax_x64))
+        enable_x64(bool(jax_x64))   # (idempotent; safe if already set)
+
     rows: List[Dict[str, Any]] = []
     sopts = SolverOpts()
     for p in p_values:
@@ -68,14 +80,16 @@ def sweep_sparsity(
                 n=n, m=m, T=T, dt=dt,
                 ensemble="sparse",
                 sparse_which=sparse_which,   # "A","B","both"
-                p_density=(p if sparse_which in ("A","both") else 1.0),              
+                p_density=(p if sparse_which in ("A","both") else 1.0),
                 p_density_B=p if sparse_which in ("B","both") else None,
                 signal=signal,
                 sigPE=sigPE,
                 algs=algs,
                 light=True,
             )
-            res = run_single(cfg, seed=seed, sopts=sopts, algs=algs)
+
+            res = run_single(cfg, seed=seed, sopts=sopts, algs=algs,
+                             use_jax=use_jax, jax_x64=jax_x64)
             row = _rowify(res)
             row["tag"] = "sparsity"
             row["p_density"] = p

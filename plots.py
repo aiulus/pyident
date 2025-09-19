@@ -426,3 +426,34 @@ def residual_autocorr(e: Sequence[float], max_lag: int = 60,
     ax.grid(True, ls="--", alpha=0.3)
     return _save_or_return(fig, ax, out_png, out_pdf)
 
+
+def annotate_ledger_footer(fig, ledger: dict | None):
+    if not ledger:
+        return
+    env = ledger.get("env", {})
+    tol = ledger.get("tolerances", {})
+    approx = ledger.get("approximations", [])
+    footer = []
+    if env:
+        footer.append(f"backend={env.get('accelerator')}, jax_x64={env.get('jax_x64')}")
+    if tol:
+        footer.append(f"svd_rtol={tol.get('svd_rtol')}, svd_atol={tol.get('svd_atol')}, pbh_cluster={tol.get('pbh_cluster_tol')}")
+    if approx:
+        kinds = ",".join(sorted({a.get('kind','') for a in approx}))
+        footer.append(f"approximations={kinds}")
+    txt = " | ".join(footer)
+    if txt:
+        fig.text(0.01, 0.01, txt, fontsize=8, ha="left", va="bottom")
+
+def plot_with_band(x: np.ndarray, y_mean: np.ndarray, y_lo: np.ndarray, y_hi: np.ndarray,
+                   xlabel: str, ylabel: str, title: str, out_png: str, out_pdf: str,
+                   ledger: dict | None = None):
+    fig, ax = plt.subplots(figsize=(5,3.2))
+    ax.plot(x, y_mean, lw=2)
+    ax.fill_between(x, y_lo, y_hi, alpha=0.25)
+    ax.set_xlabel(xlabel); ax.set_ylabel(ylabel); ax.set_title(title)
+    ax.grid(True, alpha=0.3)
+    annotate_ledger_footer(fig, ledger)
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=200); fig.savefig(out_pdf)
+    plt.close(fig)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import numpy as np
 from typing import Tuple, Optional
+from .tolerances import TolerancePolicy
 
 # ---------------------------------------------------------------------
 # Input generators + PE tests
@@ -59,8 +60,35 @@ def hankel_blocks(u: np.ndarray, s: int) -> np.ndarray:
     H = [u[i:i + cols].T for i in range(s)]  # each (m×cols)
     return np.vstack(H)  # (s*m × cols)
 
+def _moment_map(u: np.ndarray, r: int, t_scale: float = 1.0) -> np.ndarray:
+    """
+    Discrete-time 'moments' of u with polynomial basis phi_k(t) = (t/t_scale)^k.
+    Returns M in R^{r x m} with M[k,:] = sum_t phi_k(t) * u[t,:]
+    """
+    T, m = u.shape
+    t = np.arange(T, dtype=float) / float(t_scale if t_scale != 0 else 1.0)
+    Phi = np.stack([t**k for k in range(r)], axis=1)  # (T, r)
+    # least-squares moment map (can also do direct sum with weights)
+    M = Phi.T @ u   # (r, m)
+    return M
+
 
 def estimate_pe_order_block(u: np.ndarray, s_max: int, tol: float = 1e-8) -> int:
+    # Preserve API; route through TolerancePolicy for consistency
+    pol = TolerancePolicy(svd_atol=tol)  # respect old param while centralizing
+    m = u.shape[1]
+    s_max_eff = min(s_max, u.shape[0] // 2)
+    for s in range(s_max_eff, 0, -1):
+        H = hankel_blocks(u, s)
+        # SVD-based rank
+        svals = np.linalg.svd(H, compute_uv=False)
+        r = pol.rank_from_singulars(svals)
+        if r == H.shape[0]:  # full row rank
+            return s
+    return 0
+
+
+def estimate_pe_order_block_old(u: np.ndarray, s_max: int, tol: float = 1e-8) -> int:
     """Largest s such that block-Hankel H_s has full row rank (up to tol)."""
     T, m = u.shape
     s_max_eff = min(s_max, max(1, T // 2))
@@ -78,7 +106,7 @@ def estimate_pe_order(u: np.ndarray, s_max: int, tol: float = 1e-8) -> int:
 
 # ------------------ Moment-PE ------------------------
 
-def _moment_map(u: np.ndarray, r: int, t0: Optional[int], dt: float = 1.0) -> np.ndarray:
+def _moment_map_old(u: np.ndarray, r: int, t0: Optional[int], dt: float = 1.0) -> np.ndarray:
     """Discrete approximation to psi_k(u) = int_0^{t0} ((t0-s)^k/k!) u(s) ds.
 
     Disclaimer: this is a *Riemann-sum* discretization with step `dt`.

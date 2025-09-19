@@ -276,3 +276,21 @@ def _to_policy_dtype(*xs):
     use64 = bool(jax.config.read("jax_enable_x64"))
     dt = jnp.float64 if use64 else jnp.float32
     return tuple(jnp.asarray(x, dtype=dt) for x in xs)
+
+def enable_x64(flag: bool) -> None:
+    """Idempotently enable/disable JAX x64 (safe to call even if JAX absent)."""
+    try:
+        from jax import config as _jax_config
+        _jax_config.update("jax_enable_x64", bool(flag))
+    except Exception:
+        pass  # fall back on environment defaults
+
+def backend_info() -> dict:
+    try:
+        import jax
+        return {
+            "backend": jax.default_backend(),
+            "version": getattr(jax, "__version__", None),
+        }
+    except Exception:
+        return {"backend": "none", "version": None}

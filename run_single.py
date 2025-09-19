@@ -14,6 +14,10 @@ from .metrics import (
     projected_errors,
     unified_generator as unified_generator_np,  # keep explicit alias
 )
+from .runtime_banner import runtime_banner
+from .tolerances import TolerancePolicy
+from .ledger import start_ledger, attach_tolerances, log_approx, log_warning
+
 
 # Estimators (DMDc directly; MOESP imported lazily below)
 from .estimators.dmdc import dmdc_fit
@@ -88,7 +92,9 @@ def _basis_from_K_np(K: np.ndarray) -> np.ndarray:
         # empty basis, zero-rank
         return np.zeros((K.shape[0], 0))
     U, S, _ = np.linalg.svd(K, full_matrices=False)
-    r = int(np.linalg.matrix_rank(K, tol=1e-8))
+    from .tolerances import TolerancePolicy
+    tol = TolerancePolicy()
+    r = tol.rank_from_singulars(S)
     return U[:, :r]
 
 
@@ -137,6 +143,9 @@ def _pbh_margin_min_sigma(A: np.ndarray,
 
     # NumPy fallback
     lam = np.linalg.eigvals(A)
+    from .tolerances import TolerancePolicy
+    tol = TolerancePolicy()
+    lam = tol.cluster_eigs(lam)
     n = A.shape[0]
     margin = np.inf
     for l in lam:
@@ -169,6 +178,10 @@ def run_single(cfg: ExpConfig,
       - PBH “distance to failure” is reported as min_λ σ_min([λI-A, K]); this matches the structured
         test when K is the unified generator (with x0 fixed).
     """
+    # --- ledger & tolerances
+    _ledger = start_ledger()
+    _tol = TolerancePolicy()
+    attach_tolerances(_ledger, _tol)
     rng = np.random.default_rng(seed)
 
     # --- (A,B) and x0
@@ -279,6 +292,7 @@ def run_single(cfg: ExpConfig,
                 spec["dt_rho"] = dt_rho
                 if dt_rho >= 1.0 and used_finite:
                     spec["warning"] = "DT unstable (rho>=1); reported Gramian is finite-horizon."
+                    log_warning(_ledger, spec["warning"])
             except Exception:
                 pass
     # --- Estimators & projected errors on span(K)
@@ -329,7 +343,11 @@ def run_single(cfg: ExpConfig,
             "B_err_PV": float(errB),
             "diag": diag,
          }
-
+        
+    _env = runtime_banner()
+    # record some approximations 
+    log_approx(_ledger, "PBH-margin",
+               "computed over clustered eigenvalues; complex SVD; Frobenius-distance proxy")
 
     return {
         "seed": seed,
@@ -342,6 +360,8 @@ def run_single(cfg: ExpConfig,
         "gram_mode": gram_mode,   
         "spec": spec,
         "estimators": results_est,
+        "env": _env,
+        "notes": {"ledger": _ledger},
         # Optional: flags documenting the analytical mode used for K
         "K_mode": mode,
         "K_pointwise_q": None if Wmat is None else int(Wmat.shape[1]),

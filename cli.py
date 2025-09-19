@@ -13,6 +13,11 @@ from .experiments.underactuation import sweep_underactuation
 # ------------------------
 # small parsing utilities
 # ------------------------
+def _parse_str_list(s: str) -> list[str]:
+    # Accepts "a,b,c" or "a b c"
+    return [x.strip() for x in s.replace(",", " ").split() if x.strip()]
+
+
 def _parse_int_list(s: str) -> list[int]:
     """
     Accepts:
@@ -94,6 +99,13 @@ def _add_common_single_args(p: argparse.ArgumentParser) -> None:
                    help='JSON dict for projection params, e.g. {"ct_margin":1e-3,"dt_rho":0.98}.')
     p.add_argument("--rcond", type=float, default=1e-10,
                    help="LS pseudoinverse rcond (also sets auto ridge scale).")
+    
+    # Output / light mode
+    p.add_argument("--json_out", type=str, default=None,
+                   help="If set, write the single-run JSON to this path instead of printing.")
+    p.add_argument("--light", action="store_true",
+                   help="Light result mode: omit heavy arrays to save disk.")
+
 
 
 def parse_args():
@@ -123,6 +135,10 @@ def parse_args():
     pu.add_argument("--U_restr_dim", type=int, default=None)
     pu.add_argument("--PE_r", type=int, default=None)
 
+    pu.add_argument("--use-jax", action="store_true")
+    pu.add_argument("--jax-x64", action="store_true")
+
+
     # -------- sweep-sparsity --------
     psr = sub.add_parser("sweep-sparsity", help="Sweep over sparsity levels.")
     psr.add_argument("--n", type=int, default=10)
@@ -140,6 +156,10 @@ def parse_args():
     psr.add_argument("--seeds", type=str, default="0:50", help="e.g. '0:50' or '0,1,2'")
     psr.add_argument("--algs", type=str, default="dmdc,moesp,dmdc_tls,dmdc_iv")
     psr.add_argument("--out-csv", type=str, default="results_sparsity.csv")
+
+    psr.add_argument("--use-jax", action="store_true")
+    psr.add_argument("--jax-x64", action="store_true")
+
 
     # If no subcommand, fall back to single
     p.set_defaults(cmd="single")
@@ -196,12 +216,34 @@ def main():
                 jxa.enable_x64(bool(a.jax_x64))
             except Exception:
                 raise RuntimeError("JAX requested via --use-jax but not available. ...")
-        
-        out = run_single(cfg, seed=a.seed, sopts=sopts, algs=cfg.algs, use_jax=a.use_jax)
-        print(json.dumps(out, indent=2))
+            
+        out = run_single(
+            cfg,
+            seed=a.seed,
+            sopts=sopts,
+            algs=cfg.algs,
+            use_jax=a.use_jax,
+            jax_x64=a.jax_x64,
+            light=a.light,
+        )
+
+        if a.json_out:
+            from .io_utils import save_json
+            save_json(out, a.json_out)
+            print(f"Wrote {a.json_out}")
+        else:
+            print(json.dumps(out, indent=2))
         return
 
+
     if a.cmd == "sweep-underactuation":
+        if a.use_jax:
+            try:
+                from . import jax_accel as jxa
+                jxa.enable_x64(bool(a.jax_x64))
+            except Exception:
+                raise RuntimeError("JAX requested via --use-jax but not available.")
+
         m_values = _parse_int_list(a.m_values)
         seeds = _parse_int_list(a.seeds)
         algs = tuple(s.strip() for s in a.algs.split(",") if s.strip())
@@ -220,11 +262,21 @@ def main():
             seeds=seeds,
             algs=algs,
             out_csv=a.out_csv,
+            use_jax=a.use_jax,
+            jax_x64=a.jax_x64,
         )
+
         print(f"Wrote {a.out_csv}")
         return
 
     if a.cmd == "sweep-sparsity":
+        if a.use_jax:
+            try:
+                from . import jax_accel as jxa
+                jxa.enable_x64(bool(a.jax_x64))
+            except Exception:
+                raise RuntimeError("JAX requested via --use-jax but not available.")
+            
         p_values = _parse_float_list(a.p_values)
         seeds = _parse_int_list(a.seeds)
         algs = tuple(s.strip() for s in a.algs.split(",") if s.strip())
@@ -243,10 +295,12 @@ def main():
             seeds=seeds,
             algs=algs,
             out_csv=a.out_csv,
+            use_jax=a.use_jax,
+            jax_x64=a.jax_x64,
         )
+
         print(f"Wrote {a.out_csv}")
         return
-
 
 if __name__ == "__main__":
     main()

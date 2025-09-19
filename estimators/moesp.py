@@ -1,5 +1,7 @@
 import numpy as np
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, Any        
+from ..tolerances import TolerancePolicy             
+
 
 def _block_hankel(z: np.ndarray, s: int, start: int, cols: int) -> np.ndarray:
     """z: (T, q). Return H_s starting at 'start' with 'cols' columns, shape (s*q, cols)."""
@@ -51,10 +53,11 @@ def moesp_fullstate(
 
     # SVD --> dominant subspace (extended observability)
     U1, S1, V1t = np.linalg.svd(Xtil, full_matrices=False)
-    rel = S1 / (S1[0] if S1.size else 1.0)
-    r = int((rel > rcond).sum())
+    pol = TolerancePolicy(svd_rtol=max(1e-12, rcond))   
+    r = pol.rank_from_singulars(S1)                      
     if r < n:
         raise ValueError(f"MOESP: subspace rank {r} < n={n}. Increase T or adjust i/f.")
+
 
     # Extended observability with sqrt(S) scaling
     Gamma = U1[:, :n] @ np.diag(np.sqrt(S1[:n]))    # (p*f, n); here p = n (full state)
@@ -79,7 +82,17 @@ def moesp_fullstate(
     Theta = X_plus @ Z.T @ np.linalg.pinv(Z @ Z.T, rcond=rcond)    # (n, n+m)
     # Refit B using the aligned A
     Bhat = (X_plus - Ahat @ X_minus) @ U_minus.T @ np.linalg.pinv(U_minus @ U_minus.T, rcond=rcond)
-    return Ahat, Bhat
+
+    # diagnostics for logging
+    diag: Dict[str, Any] = {
+        "i": int(i),
+        "f": int(f),
+        "N_eff": int(N_eff),
+        "subspace_rank": int(r),
+        "svals": S1.tolist(),
+    }
+    return Ahat, Bhat, diag
+
 
 # Backward-compatible wrapper 
 def moesp(U: np.ndarray, X: np.ndarray, n: Optional[int] = None, *, s: Optional[int] = None, rcond: float = 1e-10):
@@ -242,5 +255,24 @@ def moesp_fit_old(
     A_aligned = T @ Ahat @ Tinv
     B_aligned = T @ Bhat
     return A_aligned, B_aligned
+
+def moesp_safe(U: np.ndarray, X: np.ndarray, n: Optional[int] = None, *,
+               s: Optional[int] = None, rcond: float = 1e-10) -> Dict[str, Any]:
+    """
+    Guarded wrapper that never raises; returns a status dict.
+    U: (m, T), X: (n, T). Internally calls moesp_fullstate on time-major arrays.
+    """
+    m, T = U.shape
+    n_state, T2 = X.shape
+    if T != T2:
+        return {"status": "error", "message": "U and X must have same T"}
+    if n is None:
+        n = n_state
+    try:
+        Ahat, Bhat, diag = moesp_fullstate(U.T, X.T, n=n, i=s, f=None, rcond=rcond)
+        return {"status": "ok", "A": Ahat, "B": Bhat, "diag": diag}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 
 __all__ = ["moesp"]

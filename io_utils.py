@@ -14,12 +14,6 @@ import numpy as np
 
 # -------------------------- paths & atomics ---------------------------
 
-def ensure_dir(path: str) -> None:
-    """Create directory if not exists. No-op for '' (current dir)."""
-    if path and not os.path.exists(path):
-        os.makedirs(path, exist_ok=True)
-
-
 def _atomic_write_bytes(data: bytes, path: str) -> None:
     tmp = path + ".tmp"
     ensure_dir(os.path.dirname(path))
@@ -44,39 +38,12 @@ def _np_json_encoder(obj: Any) -> Any:
         return obj.tolist()
     return obj
 
-
-def save_json(data: Dict[str, Any], path: str) -> None:
-    """Atomically save JSON with pretty indent; handles NumPy scalars."""
-    ensure_dir(os.path.dirname(path))
-    text = json.dumps(data, indent=2, default=_np_json_encoder)
-    _atomic_write_text(text, path)
-
-
 def save_npz(arrs: Dict[str, np.ndarray], path: str) -> None:
     """Atomically save compressed NPZ."""
     ensure_dir(os.path.dirname(path))
     tmp = path + ".tmp"
     np.savez_compressed(tmp, **arrs)
     os.replace(tmp, path)
-
-
-def save_csv(rows: list[dict], path: str, fieldnames: Optional[list[str]] = None) -> None:
-    """Atomically save CSV (writes header)."""
-    ensure_dir(os.path.dirname(path))
-    if fieldnames is None and rows:
-        # union of keys across all rows so late-coming fields (e.g., est.moesp.error) are included
-        ks = set()
-        for r in rows:
-            ks.update(r.keys())
-        fieldnames = sorted(ks)
-    tmp = path + ".tmp"
-    with open(tmp, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
-        w.writeheader()
-        for r in rows:
-            w.writerow({k: r.get(k, None) for k in fieldnames})
-    os.replace(tmp, path)
-
 
 # Convenience: append rows without re-writing the entire file
 def append_csv(rows: Iterable[dict], path: str, fieldnames: Optional[list[str]] = None) -> None:
@@ -201,3 +168,41 @@ def summarize_array(a: np.ndarray, max_bins: int = 50) -> Dict[str, Any]:
 def save_manifest(manifest: Dict[str, Any], path: str) -> None:
     """Save a small JSON manifest (config, versions, metrics, shapes…)."""
     save_json(manifest, path)
+
+################
+
+import platform
+from .runtime_banner import runtime_banner
+
+def ensure_dir(path: str) -> None:
+    if path and not os.path.exists(path):
+        os.makedirs(path, exist_ok=True)
+
+def save_json(obj: dict, path: str) -> None:
+    ensure_dir(os.path.dirname(path))
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(obj, f, indent=2, sort_keys=False, default=lambda x: float(x))
+    os.replace(tmp, path)
+
+def save_csv(rows: list[dict], path: str, fieldnames: Optional[list[str]] = None) -> None:
+    ensure_dir(os.path.dirname(path))
+    # union keys across rows
+    if fieldnames is None:
+        keys = set()
+        for r in rows:
+            keys |= set(r.keys())
+        fieldnames = sorted(keys)
+    tmp = path + ".tmp"
+    with open(tmp, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        for r in rows:
+            w.writerow({k: r.get(k, None) for k in fieldnames})
+    os.replace(tmp, path)
+
+def dump_result_with_env(result: dict, json_path: str) -> None:
+    # Ensure env block exists
+    if "env" not in result:
+        result["env"] = runtime_banner()
+    save_json(result, json_path)

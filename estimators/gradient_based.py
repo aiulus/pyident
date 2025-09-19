@@ -59,6 +59,7 @@ def _closed_form_ridge(X: np.ndarray, Xp: np.ndarray, U: np.ndarray,
         "ridge_lambda": lam,
         "cond_ZZt_init": cond_ZZt,
         "smax_Z": float(np.linalg.svd(Z, compute_uv=False)[0]) if Z.size else 0.0,
+        "backend": "jax" if _JAX_AVAILABLE else "numpy",
     }
     return A0, B0, diag
 
@@ -130,7 +131,7 @@ def dmdc_gd_fit(
             _jax_config.update("jax_enable_x64", True)
         except Exception:
             pass
-        
+
     rng = np.random.default_rng(seed)
     n, Tm1 = X.shape
     m = U.shape[0]
