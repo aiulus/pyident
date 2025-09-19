@@ -5,7 +5,6 @@ pyident/
   ensembles.py          # random matrix factories (ginibre, sparse, stable, underactuated…)
   signals.py            # PE input generators + PE order tests
   metrics.py            # metrics (PBH, Gramian, Krylov, angles)
-  pbh.py                # PBH-based metrics
   estimators/           # identification algorithms (plugins)
     __init__.py
     dmdc.py
