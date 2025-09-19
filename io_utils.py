@@ -64,13 +64,17 @@ def save_csv(rows: list[dict], path: str, fieldnames: Optional[list[str]] = None
     """Atomically save CSV (writes header)."""
     ensure_dir(os.path.dirname(path))
     if fieldnames is None and rows:
-        fieldnames = list(rows[0].keys())
+        # union of keys across all rows so late-coming fields (e.g., est.moesp.error) are included
+        ks = set()
+        for r in rows:
+            ks.update(r.keys())
+        fieldnames = sorted(ks)
     tmp = path + ".tmp"
     with open(tmp, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
         for r in rows:
-            w.writerow(r)
+            w.writerow({k: r.get(k, None) for k in fieldnames})
     os.replace(tmp, path)
 
 

@@ -47,9 +47,9 @@ def _add_common_single_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--p_density", type=float, default=0.8,
                    help="Nonzero fraction for A (and B if sparse_which='both' and p_density_B unset).")
     p.add_argument("--sparse-which", "--sparse_which",
-                   dest="sparse_which",
-                   type=str, default="both",
-                   choices=["A", "B", "both"])
+               dest="sparse_which",
+               type=str, default="both",
+               choices=["A", "B", "both"])
     p.add_argument("--p_density_B", type=float, default=None,
                    help="Optional B density (if sparse_which includes B).")
 
@@ -115,7 +115,10 @@ def parse_args():
                      help="Comma list of densities (0..1).")
     psr.add_argument("--T", type=int, default=400)
     psr.add_argument("--dt", type=float, default=0.05)
-    psr.add_argument("--sparse-which", type=str, default="both", choices=["A", "B", "both"])
+    p.add_argument("--sparse-which", "--sparse_which",
+               dest="sparse_which",
+               type=str, default="both",
+               choices=["A", "B", "both"])
     psr.add_argument("--signal", type=str, default="prbs", choices=["prbs", "multisine"])
     psr.add_argument("--sigPE", type=int, default=12)
     psr.add_argument("--seeds", type=str, default="0:50", help="e.g. '0:50' or '0,1,2'")
@@ -162,19 +165,15 @@ def main():
         )
         sopts = SolverOpts()
 
-        if a.use_jax:
-            try:
-                from . import jax_accelerator as jxa
-                jxa.enable_x64(bool(a.jax_x64))
-            except Exception:
-                # Fail fast if user explicitly requested JAX but it's missing
-                raise RuntimeError("JAX requested via --use-jax but not available. "
-                                   "Install jax/jaxlib or run without --use-jax.")
-            
-        # Optional: flip JAX x64 if requested
-        if a.use_jax and a.jax_x64:
+        try:
             from . import jax_accel as jxa
-            jxa.enable_x64(True)
+            jxa.enable_x64(bool(a.jax_x64))
+        except Exception:
+            raise RuntimeError(
+                "JAX requested via --use-jax but not available. "
+                "Install jax/jaxlib or run without --use-jax."
+            )
+        
         out = run_single(cfg, seed=a.seed, sopts=sopts, algs=cfg.algs, use_jax=a.use_jax)
         print(json.dumps(out, indent=2))
         return

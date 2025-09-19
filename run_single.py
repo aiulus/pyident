@@ -33,11 +33,13 @@ def _select_ensemble(cfg: ExpConfig, rng: np.random.Generator):
         return ginibre(cfg.n, cfg.m, rng)
     if cfg.ensemble == "sparse":
         return sparse_continuous(
-            cfg.n, cfg.m, rng,
+            n=cfg.n,
+            m=cfg.m,
+            rng=rng,
             which=cfg.sparse_which,
             p_density=cfg.p_density,
-            p_density_A=cfg.p_density_A if cfg.sparse_which in ("A", "both") else None,
-            p_density_B=cfg.p_density_B if cfg.sparse_which in ("B", "both") else None,
+            p_density_A=cfg._density_A if cfg.sparse_which in ("A", "both") else None,
+            p_density_B=cfg._density_B if cfg.sparse_which in ("B", "both") else None,
         )
     if cfg.ensemble == "stable":
         return stable(cfg.n, cfg.m, rng)

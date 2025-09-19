@@ -30,7 +30,7 @@ def _rowify(result: Dict[str, Any]) -> Dict[str, Any]:
     row["V_dim"]         = result.get("V_dim",         result.get("K_rank"))
     row["pbh_struct"]    = result.get("pbh_struct",    result.get("delta_pbh"))
     row["gram_min_ct"]   = result.get("gram_min_ct",   result.get("gram_min"))
-    
+
     # Estimator metrics flattened
     est = result.get("estimators", result.get("algs", {}))
     for name, payload in est.items():
@@ -68,7 +68,7 @@ def sweep_sparsity(
                 n=n, m=m, T=T, dt=dt,
                 ensemble="sparse",
                 sparse_which=sparse_which,   # "A","B","both"
-                p_density=p if sparse_which in ("A","both") else None,              
+                p_density=(p if sparse_which in ("A","both") else 1.0),              
                 p_density_B=p if sparse_which in ("B","both") else None,
                 signal=signal,
                 sigPE=sigPE,
