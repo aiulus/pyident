@@ -380,7 +380,7 @@ def main():
         print(f"Wrote {a.out_csv}")
         return
 
-        if a.cmd == "underactuation-plus":
+    if a.cmd == "underactuation-plus":
         if getattr(a, "use_jax", False):
             try:
                 from . import jax_accel as jxa
