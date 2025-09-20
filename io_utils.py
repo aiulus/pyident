@@ -1,13 +1,17 @@
 # pyident/io_utils.py
 from __future__ import annotations
-import csv
-import json
+import json, csv
 import os
 import sys
 import platform
 import shutil
 import subprocess
 from typing import Dict, Any, Optional, Iterable
+from .loggers.runtime_banner import runtime_banner
+
+from pathlib import Path
+import numpy as np
+
 
 import numpy as np
 
@@ -171,8 +175,56 @@ def save_manifest(manifest: Dict[str, Any], path: str) -> None:
 
 ################
 
-import platform
-from .loggers.runtime_banner import runtime_banner
+def _as_path(p) -> Path:
+    return p if isinstance(p, Path) else Path(p)
+
+def _json_default(x):
+    # robust JSON for numpy scalars/arrays
+    if isinstance(x, (np.floating, np.integer)):
+        return x.item()
+    if isinstance(x, np.ndarray):
+        return x.tolist()
+    return str(x)
+
+# --- add these public helpers used by the tests ---
+def write_json(path, obj) -> None:
+    p = _as_path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=2, sort_keys=True, default=_json_default)
+
+def write_npz(path, arrays: dict) -> None:
+    p = _as_path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(p, **arrays)
+
+def write_csv(path, data: dict) -> None:
+    """
+    If values are lists/tuples of equal length -> write as columns.
+    Otherwise writes two-column 'key,value' rows.
+    """
+    p = _as_path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    vals = list(data.values())
+    # columnar?
+    if vals and all(hasattr(v, "__len__") and not isinstance(v, (str, bytes)) for v in vals):
+        Ls = [len(v) for v in vals]
+        if len(set(Ls)) == 1:
+            headers = list(data.keys())
+            rows = zip(*vals)
+            with p.open("w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(headers)
+                for row in rows:
+                    w.writerow(row)
+            return
+    # fallback: key,value rows
+    with p.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["key", "value"])
+        for k, v in data.items():
+            w.writerow([k, v])
+
 
 def ensure_dir(path: str) -> None:
     if path and not os.path.exists(path):

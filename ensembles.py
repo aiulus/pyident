@@ -107,31 +107,19 @@ def sparse_continuous(
     return A, B
 
 
-def stable(
-    n: int,
-    m: int,
-    rng: np.random.Generator,
-    spectral_radius: float = 0.9,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Discrete-time ‘stable’ ensemble: scale A to have spectral radius < spectral_radius.
-
-    Disclaimer:
-    - This is a *post-hoc spectral scaling* (A ← \alpha A). It preserves the random
-      direction structure but *alters* the singular/eigen value distribution.
-      We use it only to avoid blow-up in DT simulations. If your study
-      is sensitive to eigenvalue statistics, prefer reporting both the raw
-      (unstable) and scaled cases.
-
-    Returns
-    -------
-    A, B : np.ndarray
+def stable(n: int, m: int, rng) -> tuple[np.ndarray, np.ndarray]:
     """
-    A = rng.standard_normal((n, n))
-    vals = npl.eigvals(A)
-    rho = max(1e-12, np.max(np.abs(vals)))
-    A = (spectral_radius / rho) * A
+    Draw (A,B) with A Hurwitz (CT-stable).
+    Strategy: draw M ~ N(0,1), then shift by (alpha + max Re lambda(M))I
+    """
+    alpha = 0.10  # margin
+    M = rng.standard_normal((n, n))
+    lam = np.linalg.eigvals(M)
+    shift = float(max(0.0, np.max(np.real(lam))) + alpha)
+    A = M - shift * np.eye(n)
     B = rng.standard_normal((n, m))
     return A, B
+
 
 def stable_continuous(n, m, rng, lam_min=0.2, lam_max=1.5):
     """

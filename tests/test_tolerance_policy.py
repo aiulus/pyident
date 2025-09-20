@@ -16,3 +16,12 @@ def test_eigen_clustering_merges_close_pairs():
     assert reps.size in (2, 3)  # depending on averaging, near-duplicates collapse
     # Check the first cluster near 1.0
     assert np.isclose(reps.real.max(), 1.0, atol=1e-6) or np.isclose(reps.real.min(), 1.0, atol=1e-6)
+
+def test_cluster_eigs_on_circle_near_duplicates():
+    tol = TolerancePolicy(pbh_cluster_tol=1e-6)
+    # Points near unit circle with tiny angular separation
+    angs = np.array([0.0, 5e-7, -4e-7, np.pi/3, np.pi/3 + 4e-7])
+    lam = np.exp(1j * angs)
+    reps = tol.cluster_eigs(lam)
+    # Should merge very close neighbors; expect ~3 clusters
+    assert 2 <= reps.size <= 3
