@@ -4,7 +4,7 @@ import importlib
 
 from ..config import ExpConfig, SolverOpts
 from ..run_single import run_single
-from . import io_utils
+from .. import io_utils
 
 def test_io_utils_write_roundtrip(tmp_path):
     cfg = ExpConfig(n=3, m=1, T=20, dt=0.05, ensemble="ginibre", signal="prbs", sigPE=8)
