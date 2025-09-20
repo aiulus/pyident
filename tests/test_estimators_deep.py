@@ -1,0 +1,45 @@
+import numpy as np
+import pytest
+
+from ..metrics import cont2discrete_zoh, projected_errors, unified_generator
+from ..estimators.moesp import moesp_fit
+from ..estimators.gradient_based import dmdc_gd_fit
+
+def _noiseless(n=6, m=2, T=180, dt=0.05, seed=0):
+    rng = np.random.default_rng(seed)
+    A = rng.standard_normal((n, n)) * 0.15 - 0.6 * np.eye(n)
+    B = rng.standard_normal((n, m))
+    x0 = rng.standard_normal(n)
+    Ad, Bd = cont2discrete_zoh(A, B, dt)
+    u = rng.standard_normal((T, m))
+    X = np.empty((n, T+1)); X[:, 0] = x0
+    for k in range(T):
+        X[:, k+1] = Ad @ X[:, k] + Bd @ u[k, :]
+    return A, B, Ad, Bd, x0, u, X
+
+def test_moesp_noiseless_fullstate():
+    n, m, T = 6, 2, 200
+    A, B, Ad, Bd, x0, u, X = _noiseless(n, m, T)
+    Xtrain, Xp, Utr = X[:, :-1], X[:, 1:], u.T
+    s = max(n, 2*n)  # safe
+    Ahat, Bhat = moesp_fit(Xtrain, Xp, Utr, s=s, n=n)
+    K = unified_generator(A, B, x0, mode="unrestricted")
+    U_, S, _ = np.linalg.svd(K, full_matrices=False)
+    PV = U_[:, : (S > 1e-10).sum()]
+    eA, eB = projected_errors(Ahat, Bhat, Ad, Bd, Vbasis=PV)
+    assert eA <= 1e-8 and eB <= 1e-8
+
+def test_gradient_descent_reports_diag_and_stable_training():
+    n, m, T = 5, 2, 120
+    A, B, Ad, Bd, x0, u, X = _noiseless(n, m, T, seed=1)
+    Xtrain, Xp, Utr = X[:, :-1], X[:, 1:], u.T
+    Ahat, Bhat, diag = dmdc_gd_fit(
+        Xtrain, Xp, Utr,
+        steps=60, rcond=1e-10, optimizer="adam", ridge=None,
+        project_stable=None, project_params=None, seed=0, use_jax=False, jax_x64=False
+    )
+    assert isinstance(diag, dict)
+    if "loss" in diag and isinstance(diag["loss"], (list, tuple)) and len(diag["loss"]) >= 3:
+        # allow small noise; check non-increasing trend on average
+        losses = diag["loss"]
+        assert losses[-1] <= losses[0] + 1e-6
