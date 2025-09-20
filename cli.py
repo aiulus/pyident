@@ -184,6 +184,39 @@ def parse_args():
     psr.add_argument("--U_restr_dim", type=int, default=None,
                     help="If set, restrict inputs to span of first q basis vectors.")
 
+        # -------- underactuation-plus --------
+    pup = sub.add_parser("underactuation-plus",
+                         help="Underactuation sweep with complementary metrics (α,β,η0, growth, CIs).")
+    pup.add_argument("--n", type=int, required=True)
+    pup.add_argument("--m", type=int, nargs="+", required=True, dest="m_values")
+    pup.add_argument("--T", type=int, default=200)
+    pup.add_argument("--dt", type=float, default=0.05)
+    pup.add_argument("--trials", type=int, default=100)
+    pup.add_argument("--sigPE", type=int, default=31)
+    pup.add_argument("--out", type=str, required=True)
+    # optional JAX toggles (kept symmetric with other cmds)
+    pup.add_argument("--use-jax", action="store_true")
+    pup.add_argument("--jax-x64", action="store_true")
+    pup.add_argument("--jax-platform", choices=["cpu","metal","auto"], default="auto")
+
+    # -------- sparsity-plus --------
+    psp = sub.add_parser("sparsity-plus",
+                         help="Sparsity sweep with complementary metrics (α,β,η0, growth, CIs).")
+    psp.add_argument("--n", type=int, required=True)
+    psp.add_argument("--m", type=int, required=True)
+    psp.add_argument("--p", type=float, nargs="+", required=True, dest="p_values",
+                     help="List of densities (0..1), e.g. --p 0.2 0.4 0.8")
+    psp.add_argument("--T", type=int, default=200)
+    psp.add_argument("--dt", type=float, default=0.05)
+    psp.add_argument("--trials", type=int, default=100)
+    psp.add_argument("--sigPE", type=int, default=31)
+    psp.add_argument("--which", type=str, default="both", dest="sparse_which",
+                     choices=["A","B","both"])
+    psp.add_argument("--out", type=str, required=True)
+    # optional JAX toggles
+    psp.add_argument("--use-jax", action="store_true")
+    psp.add_argument("--jax-x64", action="store_true")
+    psp.add_argument("--jax-platform", choices=["cpu","metal","auto"], default="auto")
 
     # If no subcommand, fall back to single
     p.set_defaults(cmd="single")
@@ -345,6 +378,54 @@ def main():
         )
 
         print(f"Wrote {a.out_csv}")
+        return
+
+        if a.cmd == "underactuation-plus":
+        if getattr(a, "use_jax", False):
+            try:
+                from . import jax_accel as jxa
+                jxa.enable_x64(bool(a.jax_x64))
+            except Exception:
+                raise RuntimeError("JAX requested via --use-jax but not available.")
+        from .experiments.underactuation import sweep_underactuation_plus
+        from .io_utils import save_json
+        res = sweep_underactuation_plus(
+            n=a.n,
+            m_values=a.m_values,
+            T=a.T,
+            dt=a.dt,
+            trials=a.trials,
+            sigPE=a.sigPE,
+            use_jax=getattr(a, "use_jax", False),
+        )
+        os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
+        save_json(res, a.out)
+        print(f"Wrote {a.out}")
+        return
+
+    if a.cmd == "sparsity-plus":
+        if getattr(a, "use_jax", False):
+            try:
+                from . import jax_accel as jxa
+                jxa.enable_x64(bool(a.jax_x64))
+            except Exception:
+                raise RuntimeError("JAX requested via --use-jax but not available.")
+        from .experiments.sparsity import sweep_sparsity_plus
+        from .io_utils import save_json
+        res = sweep_sparsity_plus(
+            n=a.n,
+            m=a.m,
+            p_values=a.p_values,
+            T=a.T,
+            dt=a.dt,
+            trials=a.trials,
+            sigPE=a.sigPE,
+            sparse_which=a.sparse_which,
+            use_jax=getattr(a, "use_jax", False),
+        )
+        os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
+        save_json(res, a.out)
+        print(f"Wrote {a.out}")
         return
 
 if __name__ == "__main__":

@@ -279,3 +279,63 @@ def projected_errors(
     dA = PV @ (Ahat - A) @ PV
     dB = PV @ (Bhat - B)
     return float(npl.norm(dA, "fro")), float(npl.norm(dB, "fro"))
+
+def controllability_subspace_basis(A: np.ndarray, B: np.ndarray, rtol: float = 1e-10) -> np.ndarray:
+    """Basis of span([B, AB, ..., A^{n-1}B]) via SVD (thin)."""
+    n = A.shape[0]
+    blocks = []
+    Ak = np.eye(n)
+    for k in range(n):
+        blocks.append(Ak @ B)
+        Ak = Ak @ A
+    C = np.concatenate(blocks, axis=1)
+    U, S, _ = np.linalg.svd(C, full_matrices=False)
+    r = int(np.sum(S > rtol))
+    return U[:, :r]
+
+def eta0(A: np.ndarray, B: np.ndarray, x0: np.ndarray, rtol: float = 1e-10) -> float:
+    """eta = ||Proj_{span(ctrl)} x0|| / ||x0||, ctrl = span([B, AB, ...])."""
+    if np.linalg.norm(x0) == 0.0:
+        return 0.0
+    V = controllability_subspace_basis(A, B, rtol=rtol)
+    px = V @ (V.T @ x0)
+    return float(np.linalg.norm(px) / (np.linalg.norm(x0) + 1e-12))
+
+def left_eig_overlaps(A: np.ndarray, x0: np.ndarray, B: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    alpha_i = |v_i^T x0| / ||x0|| ; beta_i = ||v_i^T B||_2  where v_i are (unit) left eigenvectors of A.
+    Returns (eigs, alpha, beta). Handles complex values; returns real magnitudes.
+    """
+    w, Vt = np.linalg.eig(A.T)           # columns of Vt are left eigenvectors of A
+    V = np.asarray(Vt)
+    norms = np.linalg.norm(V, axis=0)
+    norms[norms == 0.0] = 1.0
+    V = V / norms
+    alpha = np.abs(V.T.conj() @ x0) / (np.linalg.norm(x0) + 1e-12)
+    beta = np.linalg.norm(V.T.conj() @ B, axis=1)
+    return w, alpha.real, beta.real
+
+def ctrl_growth_metrics(A: np.ndarray, B: np.ndarray, rtol: float = 1e-10) -> tuple[int, int]:
+    """
+    Simple Brunovsky-like growth: track ranks of C_k = [B, AB, ..., A^{k-1}B].
+    nu_max = smallest k with rank(C_k) = n; nu_gap = last_increase - first_increase (in steps).
+    If never full rank, nu_max is current k*, nu_gap computed on observed increases.
+    """
+    n = A.shape[0]
+    blocks = []
+    growth_steps = []
+    rank_prev = 0
+    for k in range(1, n + 1):
+        blocks.append(np.linalg.matrix_power(A, k - 1) @ B)
+        Ck = np.concatenate(blocks, axis=1)
+        r = int(np.linalg.matrix_rank(Ck, tol=rtol))
+        if r > rank_prev:
+            growth_steps.append(k)
+            rank_prev = r
+        if r >= n:
+            break
+    if not growth_steps:
+        return 0, 0
+    nu_max = growth_steps[-1]
+    nu_gap = growth_steps[-1] - growth_steps[0]
+    return int(nu_max), int(nu_gap)

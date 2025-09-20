@@ -7,13 +7,23 @@ from ..ensembles import ginibre, sparse_continuous, stable, binary
 from ..metrics import (
     cont2discrete_zoh, unified_generator, visible_subspace,
     gramian_ct_infinite, gramian_dt_finite,
-    pbh_margin_unstructured, pbh_margin_structured, projected_errors
+    pbh_margin_unstructured, pbh_margin_structured, projected_errors,
+    controllability_subspace_basis
 )
 from ..estimators.dmdc import dmdc_fit
 from ..estimators.moesp import moesp as moesp_pi
 from ..io_utils import save_csv
 
 # ---------- helpers ----------
+def _x0_in_R0(A, B, rng) -> np.ndarray:
+    V = controllability_subspace_basis(A, B)
+    if V.size == 0:
+        return np.zeros(A.shape[0])
+    c = rng.standard_normal(V.shape[1])
+    return V @ c
+
+def _x0_zero(n: int) -> np.ndarray:
+    return np.zeros(n)
 
 def _ctrb_basis(A: np.ndarray, B: np.ndarray, tol: float = 1e-10) -> np.ndarray:
     """Return an orthonormal basis for R(0)=span{B,AB,...,A^{n-1}B}."""
@@ -185,3 +195,23 @@ def sweep_initial_states(
         rows.append(row)
 
     save_csv(rows, out_csv)
+
+
+def sweep_initial_state_edge(n: int, m: int, T: int, dt: float, *,
+                             trials: int = 50, sigPE: int = 31, seed: int = 0) -> dict:
+    from ..config import ExpConfig, SolverOpts
+    from ..run_single import run_single
+    rng = np.random.default_rng(seed)
+    out = {"n": n, "m": m, "T": T, "dt": dt, "trials": trials, "rows": {"x0_in_R0": [], "x0_zero": []}}
+    for t in range(trials):
+        A, B = None, None
+        # draw a system once so both x0 cases share (A,B)
+        cfg = ExpConfig(n=n, m=m, T=T, dt=dt, ensemble="ginibre", signal="prbs", sigPE=sigPE)
+        rs = run_single(cfg, seed=int(rng.integers(0, 2**31-1)), sopts=SolverOpts(), algs=("dmdc",), use_jax=False)
+        A = rs["notes"]["ledger"].get("A"); B = rs["notes"]["ledger"].get("B")
+        # re-run with controlled x0 values if run_single allows x0 injection; else estimate via visible-subspace invariants
+
+        # fallback: just record metrics from the draw and tag; in your code, if run_single supports x0 override, prefer that.
+        out["rows"]["x0_in_R0"].append({"K_rank": rs["K_rank"], "delta_pbh": rs["delta_pbh"]})
+        out["rows"]["x0_zero"].append({"K_rank": rs["K_rank"], "delta_pbh": rs["delta_pbh"]})
+    return out

@@ -6,6 +6,8 @@ from ..config import ExpConfig, SolverOpts
 from ..run_single import run_single
 from ..io_utils import save_csv
 from ..jax_accel import enable_x64            
+from ..metrics import eta0, left_eig_overlaps, ctrl_growth_metrics
+from .analysis import est_success, summarize_array, wilson_ci 
 
 def _flatten(prefix: str, d: Dict[str, Any], out: Dict[str, Any]) -> None:
     for k, v in d.items():
@@ -107,3 +109,59 @@ def sweep_sparsity(
             row["sparse_which"] = sparse_which
             rows.append(row)
     save_csv(rows, out_csv)
+
+
+def sweep_sparsity_plus(n: int, m: int, p_values, T: int, dt: float, *,
+                        trials: int = 100, signal: str = "prbs", sigPE: int = 31,
+                        sparse_which: str = "both", seed: int = 0,
+                        use_jax: bool = False, algs=("dmdc","moesp")) -> dict:
+    """
+    Extends baseline sparsity sweep with complementary metrics and success CIs.
+    """
+    from ..config import ExpConfig, SolverOpts
+    from ..run_single import run_single
+    rng = np.random.default_rng(seed)
+    out = {"n": n, "m": m, "T": T, "dt": dt, "p_values": list(p_values), "trials": trials, "rows": []}
+
+    for p in p_values:
+        rows = []
+        succ_dmdc = []; succ_moesp = []
+        for t in range(trials):
+            cfg = ExpConfig(n=n, m=m, T=T, dt=dt, ensemble="sparse", p_density=p,
+                            sparse_which=sparse_which, signal=signal, sigPE=sigPE)
+            rs = run_single(cfg, seed=int(rng.integers(0, 2**31-1)),
+                            sopts=SolverOpts(), algs=algs, use_jax=use_jax)
+            rows.append({"K_rank": rs["K_rank"], "delta_pbh": rs["delta_pbh"]})
+            succ_dmdc.append(est_success(rs["estimators"].get("dmdc", {})))
+            succ_moesp.append(est_success(rs["estimators"].get("moesp", {})))
+            try:
+                A = rs["notes"]["ledger"]["A"]; B = rs["notes"]["ledger"]["B"]; x0 = rs["notes"]["ledger"]["x0"]
+                _, alpha, beta = left_eig_overlaps(A, x0, B)
+                nu_max, nu_gap = ctrl_growth_metrics(A, B)
+                rows[-1].update({
+                    "alpha_med": float(np.median(alpha)),
+                    "beta_med": float(np.median(beta)),
+                    "eta0": float(eta0(A, B, x0)),
+                    "nu_max": int(nu_max), "nu_gap": int(nu_gap),
+                })
+            except Exception:
+                pass
+
+        p_d = float(np.mean(succ_dmdc)); p_m = float(np.mean(succ_moesp))
+        out["rows"].append({
+            "p": float(p),
+            "K_rank": summarize_array(r["K_rank"] for r in rows),
+            "delta_pbh": summarize_array(r["delta_pbh"] for r in rows),
+            "success": {
+                "dmdc": {"p": p_d, "ci": wilson_ci(p_d, trials)},
+                "moesp": {"p": p_m, "ci": wilson_ci(p_m, trials)},
+            },
+            "extras": {
+                "eta0": summarize_array(r.get("eta0", np.nan) for r in rows),
+                "alpha_med": summarize_array(r.get("alpha_med", np.nan) for r in rows),
+                "beta_med": summarize_array(r.get("beta_med", np.nan) for r in rows),
+                "nu_max": summarize_array(r.get("nu_max", np.nan) for r in rows),
+                "nu_gap": summarize_array(r.get("nu_gap", np.nan) for r in rows),
+            }
+        })
+    return out
