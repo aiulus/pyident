@@ -150,6 +150,7 @@ def dmdc_gd_fit(
     # Initial loss
     # init_loss, _, _ = _loss_and_grads_np(A, B, X, Xp, U, lam)
     init_loss, gA0, gB0 = _loss_and_grads_np(A, B, X, Xp, U, lam)
+    reverted_to_best = False  
     best_A, best_B = A.copy(), B.copy()
     best_loss = float(init_loss)
     best_t = 0
