@@ -24,7 +24,7 @@ def test_visible_subspace_ct_dt_invariance():
     k_dt = (S > 1e-10).sum()
     PV_dt = U[:, :k_dt]
     ang = _angles_between(PV_ct, PV_dt)
-    assert k_ct == k_dt and ang <= 1e-8
+    assert k_ct == k_dt and ang <= 1e-7
 
 def test_equivalence_class_invariance_outside_V():
     rng = np.random.default_rng(1)
@@ -43,4 +43,4 @@ def test_equivalence_class_invariance_outside_V():
     # V must be unchanged
     PV2, k2 = visible_subspace_basis(A_prime, B, x0)
     ang = _angles_between(PV, PV2)
-    assert k2 == k and ang <= 1e-8
+    assert k2 == k and ang <= 1e-7

@@ -1,12 +1,12 @@
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Any, Dict
 
 from .runtime_banner import runtime_banner
 
 def start_ledger() -> Dict[str, Any]:
     return {
-        "started_utc": datetime.utcnow().isoformat() + "Z",
+        "started_utc": datetime.now(UTC).isoformat(),
         "env": runtime_banner(),
         "approximations": [],
         "warnings": [],

@@ -150,14 +150,20 @@ def _compute_unified_generator(A: np.ndarray,
     Build the unified generator K(U; x0)
     return (K, rank, Vbasis) with Vbasis a thin basis for span(K).
     """
+    # Prefer NumPy for stability on METAL; JAX fallback only if safe.
     if use_jax and _JAX_AVAILABLE and hasattr(jxa, "unified_generator"):
-        K = np.asarray(jxa.unified_generator(A, B, x0, mode=mode, W=W, r=r))
-        K_rank = int(np.linalg.matrix_rank(K, tol=1e-8))
-        # Basis (use NumPy SVD to avoid requiring jnp here)
-        Vbasis = _basis_from_K_np(K)
-        return K, K_rank, Vbasis
+        try:
+            # Try JAX, but fall back silently if the backend (e.g., METAL) can’t run it.
+            K = np.asarray(jxa.unified_generator(A, B, x0, mode=mode, W=W, r=r))
+            S = np.linalg.svd(K, compute_uv=False)
+            from .loggers.tolerances import TolerancePolicy
+            K_rank = TolerancePolicy().rank_from_singulars(S)
+            Vbasis = _basis_from_K_np(K)
+            return K, K_rank, Vbasis
+        except Exception:
+            pass  # fall through to the NumPy path
 
-    # NumPy path
+    # NumPy path (robust everywhere)
     if mode == "unrestricted":
         K = unified_generator_np(A, B, x0, mode="unrestricted")
     elif mode == "pointwise":
@@ -167,7 +173,9 @@ def _compute_unified_generator(A: np.ndarray,
     else:
         raise ValueError(f"unknown unified_generator mode: {mode}")
 
-    K_rank = int(np.linalg.matrix_rank(K, tol=1e-8))
+    S = np.linalg.svd(K, compute_uv=False)
+    from .loggers.tolerances import TolerancePolicy
+    K_rank = TolerancePolicy().rank_from_singulars(S)
     Vbasis = _basis_from_K_np(K)
     return K, K_rank, Vbasis
 
@@ -180,7 +188,11 @@ def _pbh_margin_min_sigma(A: np.ndarray,
     JAX path uses jax_accelerator if available; otherwise uses NumPy.
     """
     if use_jax and _JAX_AVAILABLE and hasattr(jxa, "pbh_margin_min_sigma"):
-        return float(jxa.pbh_margin_min_sigma(A, K))
+        try:
+            return float(jxa.pbh_margin_min_sigma(A, K))
+        except Exception:
+            # METAL backend lacks eig; fall through to NumPy
+            pass
 
     # NumPy fallback
     lam = np.linalg.eigvals(A)
@@ -194,6 +206,7 @@ def _pbh_margin_min_sigma(A: np.ndarray,
         smin = np.linalg.svd(M, compute_uv=False).min().real
         margin = min(margin, float(smin))
     return float(margin)
+
 
 
 # --------------------------
@@ -259,8 +272,8 @@ def run_single(cfg: ExpConfig,
             try:
                 X = np.asarray(jxa.simulate_discrete(Ad, Bd, u, x0))  # (n, T+1)
             except Exception as e:
-                from .loggers.ledger import log_warning
                 log_warning(_ledger, f"JAX simulate_discrete failed: {type(e).__name__}: {e}. Falling back to NumPy.")
+
                 # NumPy fallback: x_{k+1} = Ad x_k + Bd u_k
                 n = Ad.shape[0]
                 m = Bd.shape[1]
@@ -314,67 +327,11 @@ def run_single(cfg: ExpConfig,
     # --- PBH margin min σ_min([λI-A, K]) (structured wrt fixed x0 via K)
     delta_pbh = _pbh_margin_min_sigma(A, K, use_jax=use_jax)
 
-    # --- CT Gramian W (only if A is Hurwitz); returns None otherwise
-    gram_min = None
-    try:
-        Kcore_ct = np.concatenate([x0.reshape(-1, 1), B], axis=1)
-        Wct = gramian_ct(A, Kcore_ct)
-        if Wct is not None:
-            gram_min = float(np.linalg.eigvalsh(Wct).min())
-        else:
-            from .metrics import gramian_dt_infinite
-            Kcore_dt = np.concatenate([x0.reshape(-1, 1), Bd], axis=1)
-            Wdt = gramian_dt_infinite(Ad, Kcore_dt)
-            if Wdt is not None:
-                gram_min = float(np.linalg.eigvalsh(Wdt).min())
-    except Exception:
-        gram_min = None
+    # --- Augmented controllability Gramian (clear provenance)
+    gram_min, gram_mode, spec = _compute_augmented_gramian(A, B, Ad, Bd, x0, cfg.T)
+    if "warning" in spec:
+        log_warning(_ledger, spec["warning"])
 
-    # --- Gramian (CT if Hurwitz; else DT if rho(Ad) < 1)
-    Kcore_ct = np.concatenate([x0.reshape(-1, 1), B], axis=1)
-    Kcore_dt = np.concatenate([x0.reshape(-1, 1), Bd], axis=1)
-
-    gram_min = None
-    gram_mode = "none"
-    spec = {}
-
-    Wct = gramian_ct(A, Kcore_ct)
-    if Wct is not None:
-        try:
-            gram_min = float(np.linalg.eigvalsh(Wct).min())
-            gram_mode = "CT"
-            spec["ct_max_real"] = float(np.max(np.real(np.linalg.eigvals(A))))
-        except Exception:
-            pass
-        try:
-            spec["dt_rho"] = float(np.max(np.abs(np.linalg.eigvals(Ad))))
-        except Exception:
-            pass
-    else:
-        Wdt = None
-        used_finite = False
-        try:
-            # Try infinite-horizon: signature (Ad, K)
-            Wdt = gramian_dt(Ad, Kcore_dt)
-            gram_mode = "DT-infinite"
-        except TypeError:
-            # Fall back to finite-horizon: signature (Ad, K, T)
-            Wdt = gramian_dt(Ad, Kcore_dt, int(cfg.T))
-            gram_mode = "DT-finite"
-            spec["dt_T"] = int(cfg.T)
-            used_finite = True
-        if Wdt is not None:
-            gram_min = float(np.linalg.eigvalsh(Wdt).min())
-            # Always report spectral radius for context
-            try:
-                dt_rho = float(np.max(np.abs(np.linalg.eigvals(Ad))))
-                spec["dt_rho"] = dt_rho
-                if dt_rho >= 1.0 and used_finite:
-                    spec["warning"] = "DT unstable (rho>=1); reported Gramian is finite-horizon."
-                    log_warning(_ledger, spec["warning"])
-            except Exception:
-                pass
-    # --- Estimators & projected errors on span(K)
     results_est: Dict[str, Any] = {}
 
     if "dmdc" in algs:
