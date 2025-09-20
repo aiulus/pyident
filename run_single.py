@@ -10,7 +10,8 @@ from .signals import prbs, multisine, restrict_pointwise, estimate_pe_order
 from .metrics import (
     cont2discrete_zoh,
     gramian_ct_infinite as gramian_ct,
-    gramian_dt_finite as gramian_dt,
+    gramian_dt_infinite as gramian_dt_inf,
+    gramian_dt_finite as gramian_dt_fin,
     projected_errors,
     unified_generator as unified_generator_np,  # keep explicit alias
 )
@@ -96,6 +97,46 @@ def _basis_from_K_np(K: np.ndarray) -> np.ndarray:
     tol = TolerancePolicy()
     r = tol.rank_from_singulars(S)
     return U[:, :r]
+
+def _compute_augmented_gramian(A: np.ndarray, B: np.ndarray,
+                               Ad: np.ndarray, Bd: np.ndarray,
+                               x0: np.ndarray, T: int):
+    """
+    Compute augmented controllability Gramian for K_core = [x0, B] (CT) or [x0, Bd] (DT).
+    Returns (gram_min: Optional[float], gram_mode: str, spec: Dict[str, Any]).
+    """
+    spec: Dict[str, Any] = {}
+    gram_min = None
+    gram_mode = "none"
+    # Try CT ∞ if Hurwitz
+    try:
+        Kcore_ct = np.concatenate([x0.reshape(-1, 1), B], axis=1)
+        Wct = gramian_ct(A, Kcore_ct)
+        if Wct is not None:
+            gram_min = float(np.linalg.eigvalsh(Wct).min())
+            gram_mode = "CT"
+        spec["ct_max_real"] = float(np.max(np.real(np.linalg.eigvals(A))))
+    except Exception:
+        pass
+    # Else DT_infinite  or DT_finite
+    if gram_mode != "CT":
+        try:
+            Kcore_dt = np.concatenate([x0.reshape(-1, 1), Bd], axis=1)
+            Wdt = gramian_dt_inf(Ad, Kcore_dt)
+            if Wdt is not None:
+                gram_min = float(np.linalg.eigvalsh(Wdt).min())
+                gram_mode = "DT-infinite"
+            else:
+                Wdt = gramian_dt_fin(Ad, Kcore_dt, int(T))
+                gram_min = float(np.linalg.eigvalsh(Wdt).min())
+                gram_mode = "DT-finite"
+                spec["dt_T"] = int(T)
+            spec["dt_rho"] = float(np.max(np.abs(np.linalg.eigvals(Ad))))
+            if spec["dt_rho"] >= 1.0 and gram_mode == "DT-finite":
+                spec["warning"] = "DT unstable (rho>=1); reported Gramian is finite-horizon."
+        except Exception:
+            pass
+    return gram_min, gram_mode, spec
 
 
 def _compute_unified_generator(A: np.ndarray,

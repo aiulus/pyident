@@ -22,30 +22,32 @@ from scipy.linalg import expm, eigvals, solve_continuous_lyapunov, solve_discret
 # ====================== Discretization ===============================
 
 def cont2discrete_zoh(A: np.ndarray, B: np.ndarray, dt: float) -> Tuple[np.ndarray, np.ndarray]:
-    """Zero-order hold discretization of (A, B) with step dt."""
+    """Zero-order hold (ZOH) discretization of (A,B) with step dt."""
     n, m = B.shape
-    M = np.zeros((n + m, n + m), dtype=float)
-    M[:n, :n] = A
-    M[:n, n:] = B
-    Md = expm(M * dt)
+    M = np.zeros((n + m, n + m))
+    M[:n, :n] = A * dt
+    M[:n, n:] = B * dt
+    Md = expm(M)
     Ad = Md[:n, :n]
     Bd = Md[:n, n:]
     return Ad, Bd
 
 
+
 # ====================== Krylov / Visible subspace ====================
 
 def _krylov(A: np.ndarray, X: np.ndarray, depth: int) -> np.ndarray:
-    """Return [X, AX, ..., A^{depth-1} X]. If depth<=0, return empty (n×0)."""
+    """Return [X, AX, ..., A^{depth-1} X]. If depth<=0, return n×0."""
     n = A.shape[0]
     if depth <= 0:
         return np.zeros((n, 0), dtype=A.dtype)
-    blocks = []
-    M = X.copy()
-    for _ in range(depth):
-        blocks.append(M)
-        M = A @ M
-    return np.hstack(blocks)
+    blocks = [X]
+    P = X
+    for _ in range(1, depth):
+        P = A @ P
+        blocks.append(P)
+    return np.concatenate(blocks, axis=1)
+
 
 
 def krylov_generator(A: np.ndarray, X: np.ndarray, depth: Optional[int] = None) -> np.ndarray:
@@ -64,46 +66,55 @@ def unified_generator(
     r: Optional[int] = None,
 ) -> np.ndarray:
     """
-    TODO: link to the manuscript
-    mode:
-      - "unrestricted": K = [K_core, A K_core, …, A^{n-1} K_core], K_core = [x0, B].
-      - "pointwise":    replace B by B·P, P the projector onto span(W).
-      - "moment-pe":    K = [K_core, …, A^{r-2} K_core, A^r x0, …, A^{n-1} x0].
+    - mode="unrestricted": K = [x0, B, A[x0 B], ..., A^{n-1}[x0 B]]
+    - mode="pointwise":    K = [x0, B@W, A[x0 B@W], ..., A^{n-1}[x0 B@W]]
+    - mode="moment-pe":    K = [Krylov(A,[x0 B], r-1), A^r x0, ..., A^{n-1} x0]
     """
     n = A.shape[0]
-    x = x0.reshape(-1, 1)
-
     if mode == "unrestricted":
-        Kcore = np.concatenate([x, B], axis=1)
-        K = _krylov(A, Kcore, n)
-
+        X = np.concatenate([x0.reshape(-1, 1), B], axis=1)
+        return _krylov(A, X, n)
     elif mode == "pointwise":
         if W is None:
-            raise ValueError("W is required for pointwise mode.")
-        P = W @ np.linalg.pinv(W)  # projector onto span(W)
-        BW = B @ P
-        Kcore = np.concatenate([x, BW], axis=1)
-        K = _krylov(A, Kcore, n)
-
+            raise ValueError("pointwise mode requires W (m×q).")
+        X = np.concatenate([x0.reshape(-1, 1), B @ W], axis=1)
+        return _krylov(A, X, n)
     elif mode == "moment-pe":
         if r is None or r < 1:
             raise ValueError("moment-pe mode requires r>=1.")
-        Kcore = np.concatenate([x, B], axis=1)
-        K1 = _krylov(A, Kcore, max(0, r - 1))  # [K_core ... A^{r-2} K_core]
-        # Tail: [A^r x0 ... A^{n-1} x0]
-        tail = []
-        vec = x.copy()
-        for k in range(1, n):  # build A^k x0 up to n-1
-            vec = A @ vec
-            if k >= r:
-                tail.append(vec)
-        K2 = np.hstack(tail) if len(tail) else np.zeros((n, 0), dtype=A.dtype)
-        K = np.hstack([K1, K2])
-
+        X = np.concatenate([x0.reshape(-1, 1), B], axis=1)
+        Khead = _krylov(A, X, max(1, min(r, n)))           # depth r
+        # add [A^r x0, ..., A^{n-1} x0]
+        v = x0.copy()
+        for _ in range(r):
+            v = A @ v
+        tail = [v.reshape(-1, 1)]
+        for _ in range(r + 1, n):
+            v = A @ v
+            tail.append(v.reshape(-1, 1))
+        Ktail = np.concatenate(tail, axis=1) if tail else np.zeros((n, 0))
+        return np.concatenate([Khead, Ktail], axis=1)
     else:
-        raise ValueError(f"Unknown mode: {mode}")
+        raise ValueError(f"unknown mode: {mode}")
 
-    return K
+def visible_subspace_basis(
+    A: np.ndarray,
+    B: np.ndarray,
+    x0: np.ndarray,
+    *,
+    mode: str = "unrestricted",
+    W: Optional[np.ndarray] = None,
+    r: Optional[int] = None,
+    tol: float = 1e-10,
+):
+    """Return (P_V, k) where columns of P_V span the visible subspace."""
+    K = unified_generator(A, B, x0, mode=mode, W=W, r=r)
+    if K.size == 0:
+        return np.zeros((A.shape[0], 0)), 0
+    U, S, _ = npl.svd(K, full_matrices=False)
+    k = int((S > tol).sum())
+    return U[:, :k], k
+
 
 
 def visible_subspace(
@@ -128,11 +139,9 @@ def visible_subspace(
 
 
 def projector_from_basis(Vbasis: np.ndarray) -> np.ndarray:
-    """Orthogonal projector onto span(Vbasis) (handles empty basis)."""
-    n = Vbasis.shape[0]
+    """Orthogonal projector onto span(Vbasis)."""
     if Vbasis.size == 0:
-        return np.zeros((n, n))
-    # Orthonormalize if not already
+        return np.zeros((0, 0), dtype=float)
     Q, _ = npl.qr(Vbasis, mode="reduced")
     return Q @ Q.T
 
@@ -140,78 +149,41 @@ def projector_from_basis(Vbasis: np.ndarray) -> np.ndarray:
 # ====================== Gramians =====================================
 
 def is_hurwitz(A: np.ndarray, tol: float = 0.0) -> bool:
-    """Return True iff Re(lambda_i) < -tol for all eigenvalues of A."""
     lam = npl.eigvals(A)
     return bool(np.all(np.real(lam) < -tol))
 
-
-def gramian_ct_infinite(A: np.ndarray, K: np.ndarray) -> Optional[np.ndarray]:
-    """Continuous-time infinite-horizon reachability Gramian:
-         A W + W A^T = - K K^T
-       Only returned if A is Hurwitz; else None.
-
-    Disclaimer: this *assumes stability*. If A is not Hurwitz,
-    prefer finite-horizon gramians or DT equivalents.
-    """
-    if not is_hurwitz(A, tol=0.0):
+def gramian_ct_infinite(A: np.ndarray, K: np.ndarray):
+    """CT infinite-horizon Gramian for ẋ = A x + K w, if A is Hurwitz."""
+    if not is_hurwitz(A, 0.0):
         return None
     try:
         return solve_continuous_lyapunov(A, -K @ K.T)
     except Exception:
         return None
 
-
-def gramian_dt_finite(A: np.ndarray, K: np.ndarray, T: int) -> np.ndarray:
-    n = A.shape[0]
-    W = np.zeros((n, n), dtype=float)
-    Ak = np.eye(n, dtype=float)
-    KKt = K @ K.T
-    for _ in range(int(T)):
-        W += Ak @ KKt @ Ak.T
-        Ak = A @ Ak
-    return W
-
-def gramian_infinite(A: np.ndarray, B: np.ndarray):
-    """
-    Return infinite-horizon controllability Gramian W (CT if Hurwitz, else DT if rho(A)<1),
-    or None if neither converges.
-    """
-    vals = eigvals(A)
-    lam_max_real = float(np.max(np.real(vals))) if vals.size else 0.0
-    # CT case: Hurwitz
-    if lam_max_real < -1e-8:
-        try:
-            return solve_continuous_lyapunov(A, -(B @ B.T))
-        except Exception:
-            return None
-    # DT case: spectral radius < 1
+def gramian_dt_infinite(Ad: np.ndarray, K: np.ndarray):
+    """DT infinite-horizon Gramian for x_{k+1} = Ad x_k + K w_k, if ρ(Ad)<1."""
     try:
-        rho = float(np.max(np.abs(vals)))
-    except Exception:
-        rho = np.inf
-    if rho < 1 - 1e-8:
-        try:
-            return solve_discrete_lyapunov(A, B @ B.T)
-        except Exception:
-            return None
-    return None
-
-
-def gramian_dt_infinite(A_d: np.ndarray, K: np.ndarray):
-    """
-    Infinite-horizon DT controllability Gramian for x_{k+1} = A_d x_k + K w_k.
-    Returns None if spectral radius >= 1 or solver fails.
-    """
-    try:
-        rho = float(np.max(np.abs(npl.eigvals(A_d))))
+        rho = float(np.max(np.abs(npl.eigvals(Ad))))
     except Exception:
         rho = np.inf
     if rho < 1.0 - 1e-8:
         try:
-            return solve_discrete_lyapunov(A_d, K @ K.T)
+            return solve_discrete_lyapunov(Ad, K @ K.T)
         except Exception:
             return None
     return None
+
+def gramian_dt_finite(Ad: np.ndarray, K: np.ndarray, T: int) -> np.ndarray:
+    """DT finite-horizon Gramian for x_{k+1}=Ad x_k + K w_k over T steps."""
+    n = Ad.shape[0]
+    W = np.zeros((n, n), dtype=float)
+    P = np.eye(n)
+    for _ in range(T):
+        W = W + P @ (K @ K.T) @ P.T
+        P = Ad @ P
+    return W
+
 
 
 # ====================== PBH margins (to move to pbh.py if desired) ===
@@ -245,17 +217,15 @@ def pbh_margin_unstructured(
     K: np.ndarray,
     eigvals: Optional[np.ndarray] = None,
 ) -> float:
-    """Unstructured Frobenius-distance proxy: min_λ σ_min([λI-A, K])."""
-    if eigvals is None:
-        eigvals = npl.eigvals(A)
+    """Unstructured Frobenius-distance proxy: min_λ σ_min([λI−A, K])."""
+    lam = npl.eigvals(A) if eigvals is None else eigvals
     n = A.shape[0]
-    margin = np.inf
-    for lam in eigvals:
-        M = np.concatenate([lam * np.eye(n) - A, K], axis=1).astype(np.complex128)
-        smin = npl.svd(M, compute_uv=False).min().real
-        margin = min(margin, float(smin))
-    return float(margin)
-
+    best = np.inf
+    for l in lam:
+        M = np.concatenate([l * np.eye(n) - A, K], axis=1)
+        s = npl.svd(M, compute_uv=False)
+        best = min(best, float(s[-1]))
+    return best
 
 def pbh_margin_with_ring(A: np.ndarray, K: np.ndarray,
                          ring_eps: float = 1e-6, ring_pts: int = 8) -> float:
@@ -276,20 +246,12 @@ def pbh_margin_with_ring(A: np.ndarray, K: np.ndarray,
 # ====================== Overlaps / errors ============================
 
 def left_eigvec_overlap(A: np.ndarray, X: np.ndarray) -> np.ndarray:
-    """Per-mode overlaps with columns of X using left eigenvectors of A.
-
-    Returns s with s_i = ||w_i^T X||_2 / ||w_i||_2, where A^T w_i = λ_i w_i.
-    """
-    _, V_AT = npl.eig(A.T)     # columns are left eigenvectors of A
-    W = V_AT.astype(np.complex128)
-    k = W.shape[1]
-    Xc = X.astype(np.complex128)
-    scores = np.empty(k, dtype=float)
-    for i in range(k):
-        wi = W[:, i].reshape(1, -1)
-        denom = npl.norm(wi)
-        scores[i] = 0.0 if denom == 0 else float(npl.norm(wi @ Xc) / denom)
-    return scores
+    """Return s with s_i = ||w_i^T X||_2 / ||w_i||_2 (left eigenvectors of A)."""
+    lam, W = npl.eig(A.T)  # columns are eigenvectors of A^T
+    num = npl.norm(W.T @ X, axis=1)
+    den = npl.norm(W, axis=0)
+    den = np.where(den == 0, 1.0, den)
+    return (num / den).real
 
 
 def x0R0_principle_angle(x0: np.ndarray, R0: np.ndarray) -> float:

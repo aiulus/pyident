@@ -19,8 +19,7 @@ from jax import lax
 
 def enable_x64(flag: bool = True) -> None:
     try:
-        from jax import config as _jax_config
-        _jax_config.update("jax_enable_x64", bool(flag))
+        jax.config.update("jax_enable_x64", bool(flag))
     except Exception:
         pass
 
@@ -38,15 +37,8 @@ def simulate_discrete(Ad: jnp.ndarray,
                       u: jnp.ndarray,
                       x0: jnp.ndarray) -> jnp.ndarray:
     """
-    Simulate x_{k+1} = Ad x_k + Bd u_k over k=0..T-1.
-
-    Shapes:
-      Ad: (n,n), Bd: (n,m)
-      u : (T, m)      -- note time-major for JAX-friendly scan
-      x0: (n,)
-
-    Returns:
-      X: (n, T+1) with X[:,0]=x0
+    x_{k+1} = Ad x_k + Bd u_k over k=0..T-1
+    Ad(n,n), Bd(n,m), u(T,m), x0(n,) -> X(n, T+1)
     """
     Ad, Bd, u, x0 = _to_f64(Ad, Bd, u, x0)
 
@@ -54,8 +46,8 @@ def simulate_discrete(Ad: jnp.ndarray,
         x_next = Ad @ x + Bd @ uk
         return x_next, x_next
 
-    x_last, xs = lax.scan(step, x0, u)  # xs: (T, n)
-    X = jnp.concatenate([x0[None, :], xs], axis=0).T  # (n, T+1)
+    _, X_hist = lax.scan(step, x0, u)           # X_hist: (T,n)
+    X = jnp.concatenate([x0.reshape(-1, 1), X_hist.T], axis=1)
     return X
 
 
@@ -168,13 +160,13 @@ def _apowers_on_x0(A, x0, start, stop):
 # ---------------------------
 
 def thin_basis(K: jnp.ndarray, rtol: float = 1e-8, atol: float = 0.0) -> jnp.ndarray:
-    """
-    Return a thin orthonormal basis for span(K) using JAX SVD.
-    """
+    """Return a thin orthonormal basis for span(K) using JAX SVD."""
     U, S, _ = jnp.linalg.svd(K, full_matrices=False)
-    thresh = rtol * (S[0] if S.size > 0 else 0.0) + atol
+    smax = jnp.where(S.size > 0, S[0], 0.0)
+    thresh = jnp.maximum(atol, rtol * smax)
     r = jnp.sum(S > thresh)
-    return U[:, : r]
+    return U[:, :r]
+
 
 # ---------------------------
 # Structured PBH margin (x0 fixed)
@@ -284,9 +276,25 @@ def _to_policy_dtype(*xs):
 def backend_info() -> dict:
     try:
         import jax
-        return {
-            "backend": jax.default_backend(),
-            "version": getattr(jax, "__version__", None),
-        }
+        return {"backend": jax.default_backend(), 
+                "version": getattr(jax, "__version__", None)}
     except Exception:
         return {"backend": "none", "version": None}
+
+    
+# ---------------------------
+# PBH margins
+# ---------------------------
+
+@jax.jit
+def pbh_margin_min_sigma(A: jnp.ndarray, K: jnp.ndarray) -> jnp.ndarray:
+    """Return min_{λ∈spec(A)} σ_min([λI-A, K])."""
+    A = jnp.asarray(A, dtype=jnp.float64)
+    K = jnp.asarray(K, dtype=jnp.float64)
+    lam = jnp.linalg.eigvals(A)
+    n = A.shape[0]
+    def smin_for_lambda(lam_s):
+        M = jnp.concatenate([lam_s * jnp.eye(n) - A, K], axis=1)
+        s = jnp.linalg.svd(M, compute_uv=False)
+        return s[-1].real
+    return jax.vmap(smin_for_lambda)(lam).min()
