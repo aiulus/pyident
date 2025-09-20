@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from pyident.config import ExpConfig, SolverOpts
+from ..config import ExpConfig, SolverOpts
 from ..run_single import run_single
 
 def test_invalid_u_shape_errors():

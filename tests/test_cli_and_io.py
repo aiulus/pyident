@@ -19,10 +19,10 @@ def test_io_utils_write_roundtrip(tmp_path):
     assert jpath.exists() and npzpath.exists() and csvpath.exists()
 
 def test_cli_smoke_if_available(tmp_path, monkeypatch):
-    spec = importlib.util.find_spec("pyident.cli")
+    spec = importlib.util.find_spec("..cli")
     if spec is None:
         pytest.skip("CLI module not present")
-    cli = importlib.import_module("pyident.cli")
+    cli = importlib.import_module("..cli")
     if not hasattr(cli, "main"):
         pytest.skip("cli.main not present")
     # Try to call main with a minimal argv; if signature unknown, skip
