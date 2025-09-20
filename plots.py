@@ -262,7 +262,8 @@ def plot_subspace_angles(angles_rad: Sequence[float],
     """Stem plot of principal angles (in degrees) between subspaces."""
     ang_deg = np.degrees(np.asarray(angles_rad, float))
     fig, ax = plt.subplots()
-    markerline, stemlines, baseline = ax.stem(np.arange(1, len(ang_deg)+1), ang_deg, use_line_collection=True)
+    x = np.arange(1, len(ang_deg) + 1)
+    markerline, stemlines, baseline = ax.stem(x, ang_deg)  
     plt.setp(stemlines, 'linewidth', 1.5)
     ax.set_xlabel("Angle index")
     ax.set_ylabel("Principal angle (deg)")
