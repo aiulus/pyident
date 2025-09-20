@@ -258,3 +258,13 @@ def dump_result_with_env(result: dict, json_path: str) -> None:
     if "env" not in result:
         result["env"] = runtime_banner()
     save_json(result, json_path)
+
+
+def save_json(obj: dict, path) -> None:
+    """Write JSON atomically; accepts str or Path."""
+    p = path if isinstance(path, Path) else Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=2, sort_keys=True, default=_json_default if "_json_default" in globals() else None)
+    os.replace(tmp, p)  # atomic on POSIX

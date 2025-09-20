@@ -25,7 +25,7 @@ def test_x64_parity_against_numpy_if_supported():
     dt = 0.05
 
     # ZOH by NumPy path (pyident)
-    from pyident.metrics import cont2discrete_zoh
+    from ..metrics import cont2discrete_zoh
     Ad, Bd = cont2discrete_zoh(A, B, dt)
 
     u = rng.standard_normal((T, m))

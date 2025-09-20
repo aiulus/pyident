@@ -2,16 +2,16 @@ from __future__ import annotations
 from typing import Iterable, Dict, Any, List, Tuple, Optional
 import numpy as np
 
-from .config import ExpConfig, SolverOpts
-from .ensembles import ginibre, sparse_continuous, stable, binary
-from .metrics import (
+from ..config import ExpConfig, SolverOpts
+from ..ensembles import ginibre, sparse_continuous, stable, binary
+from ..metrics import (
     cont2discrete_zoh, unified_generator, visible_subspace,
     gramian_ct_infinite, gramian_dt_finite,
     pbh_margin_unstructured, pbh_margin_structured, projected_errors
 )
-from .estimators.dmdc import dmdc_fit
-from .estimators.moesp import moesp as moesp_pi
-from .io_utils import save_csv
+from ..estimators.dmdc import dmdc_fit
+from ..estimators.moesp import moesp as moesp_pi
+from ..io_utils import save_csv
 
 # ---------- helpers ----------
 

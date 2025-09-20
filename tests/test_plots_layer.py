@@ -24,8 +24,8 @@ def test_plot_sigma_and_histos(tmp_path):
     # histogram
     png2 = tmp_path / "hist.png"; pdf2 = tmp_path / "hist.pdf"
     data = np.random.standard_normal(100)
-    plot_histogram(data, bins=10, out_png=str(png2), out_pdf=str(pdf2),
-                   title="hist", xlabel="x")
+    plot_histogram(data, bins=10, out_png=str(png2), out_pdf=str(pdf2))
+
     assert _nonempty(png2) and _nonempty(pdf2)
 
 def test_plot_ranks_scree_angles(tmp_path):
@@ -33,7 +33,7 @@ def test_plot_ranks_scree_angles(tmp_path):
     vals = [5, 3, 1]
     labels = ["K", "Obs", "Ctrb"]
     p1 = tmp_path / "ranks.png"; p1b = tmp_path / "ranks.pdf"
-    plot_rank_bars(vals, labels, out_png=str(p1), out_pdf=str(p1b))
+    plot_rank_bars(labels, vals, out_png=str(p1), out_pdf=str(p1b))
     # scree
     svals = np.linspace(5, 0.1, 10)
     p2 = tmp_path / "scree.png"; p2b = tmp_path / "scree.pdf"

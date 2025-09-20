@@ -2,11 +2,11 @@ from __future__ import annotations
 from typing import Iterable, Dict, Any, List, Tuple
 import numpy as np
 
-from .config import ExpConfig, SolverOpts
-from .run_single import run_single
-from .io_utils import save_csv
-from .ensembles import ginibre, sparse_continuous, stable, binary
-from .metrics import unified_generator
+from ..config import ExpConfig, SolverOpts
+from ..run_single import run_single
+from ..io_utils import save_csv
+from ..ensembles import ginibre, sparse_continuous, stable, binary
+from ..metrics import unified_generator
 
 def _flatten_result(result: Dict[str, Any]) -> Dict[str, Any]:
     row: Dict[str, Any] = {}
