@@ -339,3 +339,39 @@ def ctrl_growth_metrics(A: np.ndarray, B: np.ndarray, rtol: float = 1e-10) -> tu
     nu_max = growth_steps[-1]
     nu_gap = growth_steps[-1] - growth_steps[0]
     return int(nu_max), int(nu_gap)
+
+
+# --- Legacy shims replacing pyident/sys_utils.py ---
+
+def c2d(A: np.ndarray, B: np.ndarray, dt: float):
+    """
+    Backward-compatible alias for ZOH discretization.
+    Old name from sys_utils.c2d -> now calls cont2discrete_zoh.
+    Returns (Ad, Bd).
+    """
+    return cont2discrete_zoh(A, B, dt)
+
+
+def simulate(T: int, x0: np.ndarray, Ad: np.ndarray, Bd: np.ndarray, u: np.ndarray) -> np.ndarray:
+    """
+    Deterministic DT simulation (legacy signature from sys_utils.simulate):
+        X[:,0] = x0
+        X[:,t+1] = Ad @ X[:,t] + Bd @ u_t
+    Accepts u as either shape (m, T) or (T, m). Returns X of shape (n, T+1).
+    """
+    if u.ndim != 2:
+        raise ValueError(f"u must be 2D, got shape {u.shape}")
+    m = Bd.shape[1]
+    if u.shape == (m, T):      # (m, T)
+        U = u.T
+    elif u.shape == (T, m):    # (T, m)
+        U = u
+    else:
+        raise ValueError(f"Incompatible u shape {u.shape} for B shape {Bd.shape} and T={T}")
+
+    n = Ad.shape[0]
+    X = np.zeros((n, T + 1), dtype=Ad.dtype)
+    X[:, 0] = x0
+    for t in range(T):
+        X[:, t + 1] = Ad @ X[:, t] + Bd @ U[t, :]
+    return X

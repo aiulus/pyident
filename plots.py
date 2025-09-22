@@ -1,58 +1,69 @@
 from __future__ import annotations
-from typing import Optional, Sequence, Dict, Tuple, Iterable
+from typing import Optional, Sequence, Dict, Tuple, Iterable, Union
 
 import numpy as np
 import matplotlib.pyplot as plt
 
+import os
+
+_Number = Union[int, float, np.number]
+_Pathish = Union[str, os.PathLike]
+
+# ====================== Helpers ===================
+
+def _new_ax(figsize=(6, 3.4)):
+    import matplotlib.pyplot as plt  # local to avoid circulars in some environments
+    fig, ax = plt.subplots(figsize=figsize)
+    return fig, ax
+
+def _save_fig(fig, out_png: Optional[_Pathish] = None, out_pdf: Optional[_Pathish] = None, dpi: int = 150):
+    import matplotlib.pyplot as plt
+    if out_png:
+        fig.savefig(out_png, dpi=dpi, bbox_inches="tight")
+    if out_pdf:
+        fig.savefig(out_pdf, bbox_inches="tight")
+    plt.close(fig)
+
+def _title_and_labels(ax, *, title: Optional[str] = None,
+                      xlabel: Optional[str] = None, ylabel: Optional[str] = None):
+    if title:
+        ax.set_title(title)
+    if xlabel:
+        ax.set_xlabel(xlabel)
+    if ylabel:
+        ax.set_ylabel(ylabel)
+
+def _to1d(x) -> np.ndarray:
+    return np.asarray(x).ravel()
 
 # ====================== sigma_min(·) contour on C-plane ===================
 
-def plot_sigma_contour(
-    alpha: np.ndarray,
-    beta: np.ndarray,
-    Sigma: np.ndarray,
-    out_png: str,
-    out_pdf: str,
-    title: Optional[str] = r"$\sigma_{\min}$ of $[\lambda I - A,\ K]$",
-    eigs: Optional[Sequence[complex]] = None,
-) -> None:
+def plot_sigma_contour(alpha: Sequence[float],
+                       beta: Sequence[float],
+                       Sigma: np.ndarray,
+                       out_png: _Pathish,
+                       out_pdf: _Pathish,
+                       eigs: Optional[Sequence[complex]] = None,
+                       title: Optional[str] = None):
     """
-    Contour plot for σ_min over λ = alpha + i beta grid.
-
-    Disclaimer:
-    - NaNs are masked (white) so they don't produce misleading shading.
-    - Color map encodes magnitude only; take care when comparing scenarios
-      with different dynamic ranges (normalize if needed).
+    Contour/heatmap of σ_min over grid (alpha, beta). Keeps current signature.
     """
-    if Sigma.shape != (alpha.size, beta.size):
-        # Many callers pass already-meshed arrays; accept both contracts.
-        if Sigma.shape == (alpha.shape[0], beta.shape[0]):
-            pass
-        else:
-            raise ValueError("Sigma must have shape (len(alpha), len(beta)).")
+    import matplotlib.pyplot as plt
+    a = _to1d(alpha); b = _to1d(beta)
+    A, B = np.meshgrid(a, b, indexing="ij")
 
-    Agrid, Bgrid = np.meshgrid(alpha, beta, indexing="ij")
-    Z = np.ma.masked_invalid(Sigma)
+    fig, ax = _new_ax(figsize=(5.8, 4.2))
+    # Robust to both contourf and pcolormesh; use pcolormesh for speed
+    c = ax.pcolormesh(A, B, np.asarray(Sigma), shading="auto")
+    fig.colorbar(c, ax=ax, label=r"$\sigma_{\min}$")
 
-    fig, ax = plt.subplots(figsize=(5.5, 4.4))
-    cs = ax.contourf(Agrid, Bgrid, Z, levels=30)
-    cbar = fig.colorbar(cs, ax=ax)
-    cbar.set_label(r"$\sigma_{\min}$")
-
-    ax.set_xlabel(r"$\Re(\lambda)$")
-    ax.set_ylabel(r"$\Im(\lambda)$")
-    if title:
-        ax.set_title(title)
-
-    # Optional: overlay eigenvalues
+    # Eigenvalue overlays (if provided): plot as points at (Re, Im)
     if eigs:
-        ax.scatter(np.real(eigs), np.imag(eigs), s=10, c="k", marker="x", label="eig(A)")
-        ax.legend(loc="best", frameon=False)
+        ev = np.asarray(list(eigs), dtype=np.complex128)
+        ax.scatter(ev.real, ev.imag, s=18, marker="x")
 
-    fig.tight_layout()
-    fig.savefig(out_png, dpi=200)
-    fig.savefig(out_pdf)
-    plt.close(fig)
+    _title_and_labels(ax, title=title, xlabel=r"$\Re(\lambda)$", ylabel=r"$\Im(\lambda)$")
+    _save_fig(fig, out_png, out_pdf)
 
 
 # ====================== PGF/TikZ export ===============================
@@ -93,30 +104,42 @@ def emit_pgfplots_tex(csv_path: str, tex_path: str, xlabel: str = r"\Re(\lambda)
 
 # ====================== Rank bars & histograms ========================
 
-def plot_rank_bars(labels: Sequence[str], ranks: Sequence[int], out_png: str, out_pdf: str, ylabel: str = "rank") -> None:
-    """Simple bar plot for ranks (e.g., rank(K), dim(V), rank(Hankel))."""
-    fig, ax = plt.subplots(figsize=(6, 3.4))
+def plot_rank_bars(labels: Sequence[str],
+                   ranks: Sequence[int],
+                   out_png: _Pathish,
+                   out_pdf: _Pathish,
+                   ylabel: str = "rank"):
+    """
+    Bar plot for integer ranks. Signature preserved.
+    """
+    import matplotlib.pyplot as plt
+    labels = list(labels)
+    ranks = list(ranks)
+    fig, ax = _new_ax(figsize=(6, 3.4))
     ax.bar(range(len(labels)), ranks)
     ax.set_xticks(range(len(labels)))
     ax.set_xticklabels(labels, rotation=30, ha="right")
     ax.set_ylabel(ylabel)
-    ax.set_ylim(0, max(ranks) + 1 if ranks else 1)
-    fig.tight_layout()
-    fig.savefig(out_png, dpi=200)
-    fig.savefig(out_pdf)
-    plt.close(fig)
+    ax.set_ylim(0, (max(ranks) + 1) if ranks else 1)
+    _save_fig(fig, out_png, out_pdf)
 
 
-def plot_histogram(values: np.ndarray, out_png: str, out_pdf: str, bins: int = 30, xlabel: str = "", ylabel: str = "count") -> None:
-    """Histogram helper (for σ_min, margins, errors…)."""
-    fig, ax = plt.subplots(figsize=(5.2, 3.6))
-    ax.hist(values[~np.isnan(values)], bins=bins)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
-    fig.tight_layout()
-    fig.savefig(out_png, dpi=200)
-    fig.savefig(out_pdf)
-    plt.close(fig)
+
+def plot_histogram(data: Sequence[_Number],
+                   bins: int = 20,
+                   out_png: _Pathish = None,
+                   out_pdf: _Pathish = None,
+                   title: Optional[str] = None,
+                   xlabel: Optional[str] = None):
+    """
+    Simple histogram; keeps backward-compatible kwargs used in tests.
+    """
+    import matplotlib.pyplot as plt
+    fig, ax = _new_ax(figsize=(5.2, 3.4))
+    ax.hist(_to1d(data), bins=bins)
+    _title_and_labels(ax, title=title, xlabel=xlabel, ylabel="count")
+    _save_fig(fig, out_png, out_pdf)
+
 
 
 # -------------------------- small internal helper ----------------------------
@@ -130,17 +153,20 @@ def _save_or_return(fig, axes, out_png: Optional[str], out_pdf: Optional[str]):
 
 # ------------------------------ 1) Scree plot --------------------------------
 def plot_scree(svals: Sequence[float],
-               title: Optional[str] = None,
-               out_png: Optional[str] = None, out_pdf: Optional[str] = None):
-    """Scree (singular values descending), log-y."""
-    svals = np.asarray(svals, dtype=float)
-    fig, ax = plt.subplots()
-    ax.semilogy(np.arange(1, len(svals)+1), np.sort(svals)[::-1], marker="o")
-    ax.set_xlabel("Index")
-    ax.set_ylabel("Singular value")
-    if title: ax.set_title(title)
-    ax.grid(True, which="both", ls="--", alpha=0.4)
-    return _save_or_return(fig, ax, out_png, out_pdf)
+               out_png: _Pathish,
+               out_pdf: _Pathish,
+               title: Optional[str] = None):
+    """
+    Scree plot for singular values (descending).
+    """
+    import matplotlib.pyplot as plt
+    s = _to1d(svals)
+    fig, ax = _new_ax(figsize=(5.2, 3.4))
+    ax.plot(np.arange(1, s.size + 1), s, marker="o")
+    _title_and_labels(ax, title=title, xlabel="index", ylabel="singular value")
+    ax.set_xlim(0.5, s.size + 0.5)
+    _save_fig(fig, out_png, out_pdf)
+
 
 # --------------------- 2) PE ladder: rank & condition ------------------------
 def plot_pe_ladder(depths: Sequence[int],
@@ -258,17 +284,23 @@ def violin_errors(groups: Dict[str, Sequence[float]],
 
 # ------------------------ 5) Subspace angles (degrees) -----------------------
 def plot_subspace_angles(angles_rad: Sequence[float],
-                         out_png: Optional[str] = None, out_pdf: Optional[str] = None):
-    """Stem plot of principal angles (in degrees) between subspaces."""
-    ang_deg = np.degrees(np.asarray(angles_rad, float))
-    fig, ax = plt.subplots()
+                         out_png: _Pathish,
+                         out_pdf: _Pathish,
+                         title: Optional[str] = None):
+    """
+    Stem plot of principal angles (in degrees).
+    """
+    import matplotlib.pyplot as plt
+    ang = _to1d(angles_rad)
+    ang_deg = np.degrees(ang)
+    fig, ax = _new_ax(figsize=(5.2, 3.4))
     x = np.arange(1, len(ang_deg) + 1)
-    markerline, stemlines, baseline = ax.stem(x, ang_deg)  
-    plt.setp(stemlines, 'linewidth', 1.5)
-    ax.set_xlabel("Angle index")
-    ax.set_ylabel("Principal angle (deg)")
-    ax.grid(True, ls="--", alpha=0.3)
-    return _save_or_return(fig, ax, out_png, out_pdf)
+    markerline, stemlines, baseline = ax.stem(x, ang_deg)  # no use_line_collection
+    # Reduce clutter a touch
+    baseline.set_visible(False)
+    _title_and_labels(ax, title=title, xlabel="index", ylabel="angle (deg)")
+    _save_fig(fig, out_png, out_pdf)
+
 
 # ----------------------- 6) Visible-dimension heatmap -----------------------
 def heatmap_visible_dim(x_ticks: Sequence,

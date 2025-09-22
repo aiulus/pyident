@@ -99,7 +99,6 @@ def moesp_fullstate(
     which equals the MOESP A-estimate under ideal conditions. We compute A,B from:
         Xp = A X + B U
     where X = x_ts[:-1].T, U = u_ts[:-1].T, Xp = x_ts[1:].T.
-    This keeps the API and guarantees correctness/stability for your setting.
     """
     X  = x_ts[:-1].T   # (n, T-1)
     Xp = x_ts[1:].T    # (n, T-1)
