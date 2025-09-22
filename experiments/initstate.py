@@ -10,8 +10,8 @@ from ..metrics import (
     pbh_margin_unstructured, pbh_margin_structured, projected_errors,
     controllability_subspace_basis
 )
-from ..estimators.dmdc import dmdc_fit
-from ..estimators.moesp import moesp as moesp_pi
+from ..estimators import dmdc_fit
+from ..estimators import moesp as moesp_pi
 from ..io_utils import save_csv
 
 # ---------- helpers ----------

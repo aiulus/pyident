@@ -21,7 +21,10 @@ from .loggers.ledger import start_ledger, attach_tolerances, log_approx, log_war
 
 
 # Estimators (DMDc directly; MOESP imported lazily below)
-from .estimators.dmdc import dmdc_fit
+from .estimators import (
+    dmdc_fit,
+    moesp_fit as moesp_core
+)
 
 # Optional JAX accelerator (fully graceful fallback)
 try:
@@ -350,7 +353,6 @@ def run_single(cfg: ExpConfig,
     if "moesp" in algs:
         try:
             # Simple PI-MOESP assuming full-state output y = x
-            from .estimators.moesp import moesp_fit as moesp_core
             y = X.T  # (T+1, n)
             s_use = max(cfg.n, min(10, cfg.T // 4))  # keep s >= n (heuristic)
             Ahat, Bhat = moesp_core(Xtrain, Xp, Utrain, s=s_use, n=cfg.n)
@@ -358,27 +360,6 @@ def run_single(cfg: ExpConfig,
             results_est["moesp"] = {"A_err_PV": errA, "B_err_PV": errB}
         except Exception as e:
             results_est["moesp"] = {"error": str(e)}
-    if "gd_dmdc" in algs:
-        from .estimators.gradient_based import dmdc_gd_fit as gd_fit
-        Ahat, Bhat, diag = gd_fit(
-            Xtrain, Xp, Utrain,
-            steps=getattr(sopts, "gd_steps", 200),
-            rcond=getattr(sopts, "rcond", 1e-10),
-            lr=getattr(sopts, "gd_lr", None),
-            optimizer=getattr(sopts, "gd_opt", "adam"),
-            ridge=getattr(sopts, "gd_ridge", None),
-            project_stable=getattr(sopts, "gd_project", None),
-            project_params=getattr(sopts, "gd_proj_params", None),
-            seed=seed,
-            use_jax=use_jax,
-            jax_x64=getattr(sopts, "jax_x64", False),
-        )
-        errA, errB = projected_errors(Ahat, Bhat, Ad, Bd, Vbasis=Vbasis)
-        results_est["gd_dmdc"] = {
-            "A_err_PV": float(errA),  
-            "B_err_PV": float(errB),
-            "diag": diag,
-         }
         
     _env = runtime_banner()
     # record some approximations 

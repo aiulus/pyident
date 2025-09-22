@@ -1,7 +1,7 @@
 import numpy as np
 from statistics import median
 from ..metrics import cont2discrete_zoh, projected_errors, unified_generator
-from ..estimators.dmdc import dmdc_fit
+from ..estimators import dmdc_fit
 
 def _synth(n=5, m=2, T=180, dt=0.05, seed=0):
     rng = np.random.default_rng(seed)

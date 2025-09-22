@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 from ..metrics import cont2discrete_zoh, unified_generator, visible_subspace_basis, projected_errors
-from ..estimators.dmdc import dmdc_fit, dmdc_tls_fit, dmdc_iv_fit
+from ..estimators import dmdc_fit, dmdc_tls_fit, dmdc_iv_fit
 
 def _noiseless_system(n=5, m=2, T=120, dt=0.05, seed=0):
     rng = np.random.default_rng(seed)
