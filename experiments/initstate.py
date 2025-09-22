@@ -11,7 +11,7 @@ from ..metrics import (
     controllability_subspace_basis
 )
 from ..estimators import dmdc_fit
-from ..estimators import moesp as moesp_pi
+from ..estimators import moesp_fit as moesp_pi 
 from ..io_utils import save_csv
 
 # ---------- helpers ----------
