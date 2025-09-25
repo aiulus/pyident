@@ -4,7 +4,7 @@ import json
 import numpy as np
 from .config import ExpConfig, SolverOpts
 
-import os
+import os, csv
 os.environ.setdefault("JAX_PLATFORM_NAME", "cpu")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
@@ -112,7 +112,7 @@ def _add_common_single_args(p: argparse.ArgumentParser) -> None:
                     type=str, default=None,
                     help="Write the result JSON to this path (directories auto-created).")
 
-    
+
 
 
 def parse_args():
@@ -122,6 +122,17 @@ def parse_args():
     # -------- single --------
     ps = sub.add_parser("single", help="Run a single experiment (default).")
     _add_common_single_args(ps)
+    ps.add_argument("--outdir", type=str, default=None,
+                help="If set, write outputs under this directory.")
+    ps.add_argument("--prefix", type=str, default="single",
+                    help="Filename prefix for outputs (e.g., single_…)")
+
+    # optional plotting toggles (no-ops unless you wire them up)
+    ps.add_argument("--plots", action="store_true",
+                    help="If set, generate basic plots for the single run.")
+    ps.add_argument("--plot-format", type=str, choices=["png","pdf","both"], default="png",
+                    help="Plot format(s) if --plots is used.")
+
 
     # -------- sweep-underactuation --------
     pu = sub.add_parser("sweep-underactuation", help="Sweep over m (underactuation study).")
@@ -218,6 +229,17 @@ def parse_args():
     psp.add_argument("--jax-x64", action="store_true")
     psp.add_argument("--jax-platform", choices=["cpu","metal","auto"], default="auto")
 
+    # top-level (common) options
+    for sp in (pu, psr):
+        sp.add_argument("--plots", action="store_true",
+                        help="If set, generate quick-look plots alongside CSVs.")
+        sp.add_argument("--plot-dir", type=str, default=None,
+                        help="Directory to save plots (defaults to outdir).")
+        sp.add_argument("--plot-format", type=str, default="png",
+                        choices=("png","pdf","both"),
+                        help="Image format for plots (default: png).")
+
+
     # If no subcommand, fall back to single
     p.set_defaults(cmd="single")
     return p.parse_args()
@@ -295,6 +317,9 @@ def main():
             with open(a.out_json, "w") as f:
                 json.dump(out, f, indent=2)
             print(f"Wrote {a.out_json}", file=sys.stderr)
+            if a.plots:
+                plot_dir = a.plot_dir or (os.path.dirname(a.out_csv) or ".")
+                _quick_plots_from_csv(a.out_csv, plot_dir, fmt=a.plot_format)
         else:
             print(json.dumps(out, indent=2))
             if a.out_json:
@@ -341,6 +366,10 @@ def main():
         )
 
         print(f"Wrote {a.out_csv}")
+
+        if a.plots:
+            plot_dir = a.plot_dir or (os.path.dirname(a.out_csv) or ".")
+            _quick_plots_from_csv(a.out_csv, plot_dir, fmt=a.plot_format)
         return
 
     if a.cmd == "sweep-sparsity":
@@ -378,6 +407,9 @@ def main():
         )
 
         print(f"Wrote {a.out_csv}")
+        if a.plots:
+            plot_dir = a.plot_dir or (os.path.dirname(a.out_csv) or ".")
+            _quick_plots_from_csv(a.out_csv, plot_dir, fmt=a.plot_format)
         return
 
     if a.cmd == "underactuation-plus":
@@ -401,6 +433,9 @@ def main():
         os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
         save_json(res, a.out)
         print(f"Wrote {a.out}")
+        if a.plots:
+            plot_dir = a.plot_dir or (os.path.dirname(a.out_csv) or ".")
+            _quick_plots_from_csv(a.out_csv, plot_dir, fmt=a.plot_format)
         return
 
     if a.cmd == "sparsity-plus":
@@ -426,7 +461,141 @@ def main():
         os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
         save_json(res, a.out)
         print(f"Wrote {a.out}")
+        if a.plots:
+            plot_dir = a.plot_dir or (os.path.dirname(a.out_csv) or ".")
+            _quick_plots_from_csv(a.out_csv, plot_dir, fmt=a.plot_format)
         return
+    
+# ============= Helpers =============
+
+def _parse_seeds(s: str):
+    s = s.strip()
+    if ":" in s:
+        a, b = s.split(":")
+        return list(range(int(a), int(b)))
+    return [int(x) for x in s.split(",") if x.strip() != ""]
+
+def _ensure_dir(path: str):
+    if path and not os.path.isdir(path):
+        os.makedirs(path, exist_ok=True)
+
+def _save_fig_both(fig, outbase: str, fmt: str):
+    import matplotlib.pyplot as plt
+    fmt = fmt.lower()
+    if fmt in ("png", "both"):
+        fig.savefig(outbase + ".png", dpi=150, bbox_inches="tight")
+    if fmt in ("pdf", "both"):
+        fig.savefig(outbase + ".pdf", bbox_inches="tight")
+    plt.close(fig)
+
+def _quick_plots_from_csv(csv_path: str, plot_dir: str, fmt: str = "png"):
+    """
+    Minimal, schema-agnostic plot generator:
+      - histograms for K_rank (if present) and delta_pbh (if present)
+      - median trend vs a detected group key among ['m','p_density','sigPE','r','q'] if present
+    Uses matplotlib directly for the trends; uses plots.py histogram when available.
+    """
+    from . import plots as P
+    import matplotlib.pyplot as plt
+
+    _ensure_dir(plot_dir)
+    with open(csv_path, "r", newline="") as f:
+        rows = list(csv.DictReader(f))
+
+    if not rows:
+        return
+
+    # Collect numeric columns as needed
+    def get_col(name, cast=float):
+        vals = []
+        for r in rows:
+            if name in r and r[name] not in ("", None):
+                try:
+                    vals.append(cast(r[name]))
+                except Exception:
+                    pass
+        return vals
+
+    k_rank = get_col("K_rank", int)
+    delta  = get_col("delta_pbh", float)
+
+    base = os.path.splitext(os.path.basename(csv_path))[0]
+    outbase = os.path.join(plot_dir, base)
+
+    # Histograms (robust, small)
+    if k_rank:
+        bins = min(30, max(5, len(k_rank)//4))
+        if fmt in ("png", "both"):
+            P.plot_histogram(k_rank, bins=bins,
+                            out_png=outbase + "_Krank.png",
+                            title="K_rank distribution", xlabel="K_rank")
+        if fmt in ("pdf", "both"):
+            P.plot_histogram(k_rank, bins=bins,
+                            out_pdf=outbase + "_Krank.pdf",
+                            title="K_rank distribution", xlabel="K_rank")
+
+    if delta:
+        bins = min(30, max(5, len(delta)//4))
+        if fmt in ("png", "both"):
+            P.plot_histogram(delta, bins=bins,
+                            out_png=outbase + "_PBH.png",
+                            title="PBH margin distribution", xlabel="δ_PBH")
+        if fmt in ("pdf", "both"):
+            P.plot_histogram(delta, bins=bins,
+                            out_pdf=outbase + "_PBH.pdf",
+                            title="PBH margin distribution", xlabel="δ_PBH")
+    
+
+    # Grouped medians for common sweep keys
+    for gkey in ("m", "p_density", "sigPE", "r", "q"):
+        gvals = get_col(gkey, float)
+        if not gvals:
+            continue
+        # Build per-group medians
+        from collections import defaultdict
+        by = defaultdict(lambda: {"K_rank": [], "delta_pbh": []})
+        for r in rows:
+            try:
+                g = float(r[gkey])
+            except Exception:
+                continue
+            if "K_rank" in r:
+                try: by[g]["K_rank"].append(int(r["K_rank"]))
+                except Exception: pass
+            if "delta_pbh" in r:
+                try: by[g]["delta_pbh"].append(float(r["delta_pbh"]))
+                except Exception: pass
+
+        groups = sorted(by.keys())
+        if not groups:
+            continue
+
+        # K_rank median trend
+        y1 = []
+        for g in groups:
+            arr = by[g]["K_rank"]
+            y1.append(float(np.median(arr)) if arr else np.nan)
+        if any(np.isfinite(y1)):
+            fig, ax = plt.subplots(figsize=(5.6, 3.2))
+            ax.plot(groups, y1, marker="o")
+            ax.set_title(f"Median K_rank vs {gkey}")
+            ax.set_xlabel(gkey); ax.set_ylabel("median K_rank")
+            _save_fig_both(fig, outbase + f"_Krank_vs_{gkey}", fmt)
+
+        # δ_PBH median trend
+        y2 = []
+        for g in groups:
+            arr = by[g]["delta_pbh"]
+            y2.append(float(np.median(arr)) if arr else np.nan)
+        if any(np.isfinite(y2)):
+            fig, ax = plt.subplots(figsize=(5.6, 3.2))
+            ax.plot(groups, y2, marker="o")
+            ax.set_title(f"Median δ_PBH vs {gkey}")
+            ax.set_xlabel(gkey); ax.set_ylabel("median δ_PBH")
+            _save_fig_both(fig, outbase + f"_PBH_vs_{gkey}", fmt)
+
+        break  # plot against the first grouping key we find
+
 
 if __name__ == "__main__":
     main()
