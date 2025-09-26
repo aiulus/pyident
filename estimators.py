@@ -2,6 +2,59 @@
 from __future__ import annotations
 from typing import Optional, Tuple
 import numpy as np
+# Add to your script or estimators.py
+import pysindy
+# Minimal NODE wrapper (add to your script or estimators.py)
+import torch
+from torchdiffeq import odeint
+
+
+class NODE(torch.nn.Module):
+    def __init__(self, n, m):
+        super().__init__()
+        self.fc = torch.nn.Linear(n + m, n)
+
+    def forward(self, t, x_and_u):
+        return self.fc(x_and_u)
+
+def node_fit(Xtrain, Xp, Utrain, dt, epochs=100):
+    n, T = Xtrain.shape
+    m = Utrain.shape[0]
+    device = 'cpu'
+    model = NODE(n, m).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
+    Xtrain_torch = torch.tensor(Xtrain.T, dtype=torch.float32, device=device)
+    Utrain_torch = torch.tensor(Utrain.T, dtype=torch.float32, device=device)
+    Xp_torch = torch.tensor(Xp.T, dtype=torch.float32, device=device)
+
+    for epoch in range(epochs):
+        optimizer.zero_grad()
+        xu = torch.cat([Xtrain_torch, Utrain_torch], dim=1)
+        pred = model.fc(xu)
+        loss = torch.nn.functional.mse_loss(pred, Xp_torch)
+        loss.backward()
+        optimizer.step()
+    # Extract linear weights
+    W = model.fc.weight.detach().cpu().numpy()
+    b = model.fc.bias.detach().cpu().numpy()
+    # Split W into A, B
+    A_node = W[:, :n]
+    B_node = W[:, n:]
+    return A_node, B_node
+
+
+def sindy_fit(Xtrain, Xp, Utrain, dt):
+    # Xtrain: (n, T), Xp: (n, T), Utrain: (m, T)
+    # Transpose to (T, n) and (T, m) for PySINDy
+    model = pysindy.SINDy(feature_library=pysindy.feature_library.PolynomialLibrary(degree=2))
+    Xtrain_T = Xtrain.T
+    Utrain_T = Utrain.T
+    model.fit(Xtrain_T, u=Utrain_T, t=dt)
+    # Extract identified A, B (linear part only)
+    coef = model.coefficients()
+    # If using PolynomialLibrary(degree=1), coef is [A | B]
+    # For higher degree, you may need to parse coef
+    return coef[:, :Xtrain.shape[0]], coef[:, Xtrain.shape[0]:]
 
 # -----------------------------
 # 1) DMDc (minimum-norm pinv)

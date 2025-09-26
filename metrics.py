@@ -19,6 +19,52 @@ from scipy.linalg import expm, eigvals, solve_continuous_lyapunov, solve_discret
 # ---------------------------------------------------------------------
 
 
+def same_equiv_class(A1: np.ndarray, B1: np.ndarray,
+                     A2: np.ndarray, B2: np.ndarray,
+                     x0: np.ndarray, tol: float = 1e-10) -> tuple[bool, dict]:
+    """
+    Check (A2,B2) ∈ [A1,B1]_{x0} under full input richness.
+    Criterion (per thesis):
+      (i) B2 == B1
+      (ii) A2|_V == A1|_V on V = K(A1,[x0 B1]).
+
+    Returns (ok, info) where ok is True/False and info has diagnostics.
+    """
+    # 1) exact-equality of B (within tol)
+    dB = np.linalg.norm(B2 - B1, ord='fro')
+
+    # 2) build visible subspace for (A1,B1,x0)
+    P, k = visible_subspace(A1, B1, x0, tol=tol)  # P is n×k with orthonormal cols
+    n = A1.shape[0]
+    I = np.eye(n)
+
+    # 3) compare restrictions on V and check leakage
+    A1_V = P.T @ A1 @ P
+    A2_V = P.T @ A2 @ P
+    dA_V = np.linalg.norm(A2_V - A1_V, ord='fro')
+
+    # Optional: ensure A2 maps V into V numerically (no leakage)
+    leak_A2 = np.linalg.norm((I - P @ P.T) @ A2 @ P, ord='fro')
+
+    ok = (dB <= tol) and (dA_V <= tol) and (leak_A2 <= tol)
+
+    info = {
+        "dim_V": int(k),
+        "||B2-B1||_F": float(dB),
+        "||A2|V - A1|V||_F": float(dA_V),
+        "leak_A2": float(leak_A2),
+        "tol": float(tol),
+    }
+    return ok, info
+
+
+def visible_basis_dt(Ad,Bd,x0,tol_rank=1e-12):
+    K = unified_generator(Ad, Bd, x0, mode="unrestricted")
+    U, s, _ = np.linalg.svd(K, full_matrices=False)
+    r = int((s > tol_rank * s[0]).sum())  # scale by s[0]
+    return U[:, :r]
+
+
 # ====================== Discretization ===============================
 
 def cont2discrete_zoh(A: np.ndarray, B: np.ndarray, dt: float) -> Tuple[np.ndarray, np.ndarray]:
@@ -266,6 +312,15 @@ def x0R0_principle_angle(x0: np.ndarray, R0: np.ndarray) -> float:
     PR = R0 @ Rplus
     return float(npl.norm(PR @ x0) / npl.norm(x0))
 
+def pair_distance(
+        Ahat: np.ndarray, 
+        Bhat: np.ndarray, 
+        A: np.ndarray, 
+        B: np.ndarray) -> float:
+    errA = float(npl.norm(Ahat - A, "fro"))
+    errB = float(npl.norm(Bhat - B, "fro"))
+    return float(np.mean([errA, errB]))
+
 
 def projected_errors(
     Ahat: np.ndarray,
@@ -375,3 +430,64 @@ def simulate(T: int, x0: np.ndarray, Ad: np.ndarray, Bd: np.ndarray, u: np.ndarr
     for t in range(T):
         X[:, t + 1] = Ad @ X[:, t] + Bd @ U[t, :]
     return X
+
+
+# --- NEW: regressor diagnostics -------------------------------------
+def regressor_stats(X0: np.ndarray, U: np.ndarray, rtol_rank: float = 1e-12) -> dict:
+    """Rank/cond of Z=[X0;U]."""
+    Z = np.vstack([X0, U])
+    s = npl.svd(Z, compute_uv=False)
+    if s.size == 0:
+        return {"rank": 0, "cond": np.inf, "smin": 0.0}
+    rank = int(np.sum(s > rtol_rank * s[0]))
+    cond = float(s[0] / (s[-1] + 1e-18))
+    return {"rank": rank, "cond": cond, "smin": float(s[-1])}
+
+# --- NEW: DT theoretical-class checker (relative thresholds) ----------
+def same_equiv_class_dt_rel(Ad, Bd, Ahat, Bhat, x0,
+                            rtol_eq: float = 1e-2,
+                            rtol_rank: float = 1e-12,
+                            use_leak: bool = True):
+    # robust V basis
+    K = unified_generator(Ad, Bd, x0, mode="unrestricted")
+    if K.size == 0:
+        return False, {"dim_V": 0}
+    U, s, _ = npl.svd(K, full_matrices=False)
+    k = int(np.sum(s > rtol_rank * s[0]))
+    P = U[:, :k]; I = np.eye(Ad.shape[0])
+
+    dA_V = float(npl.norm(P.T @ (Ahat - Ad) @ P, "fro"))
+    leak = float(npl.norm((I - P @ P.T) @ Ahat @ P, "fro"))
+    dB   = float(npl.norm(Bhat - Bd, "fro"))
+
+    thrA = rtol_eq * max(1.0, npl.norm(P.T @ Ad @ P, "fro"))
+    thrB = rtol_eq * max(1.0, npl.norm(Bd, "fro"))
+    thrL = rtol_eq * max(1.0, npl.norm(Ad, "fro"))
+
+    ok = (dA_V <= thrA) and (dB <= thrB) and ( (not use_leak) or (leak <= thrL) )
+    info = {"dim_V": int(k), "dA_V": dA_V, "leak": leak, "dB": dB,
+            "thrA": thrA, "thrB": thrB, "thrLeak": thrL}
+    return ok, info
+
+# --- NEW: data-equivalence residual ----------------------------------
+def data_equivalence_residual(X0, X1, U, Ahat, Bhat, rtol: float = 1e-10):
+    R = X1 - Ahat @ X0 - Bhat @ U
+    rel = float(npl.norm(R, "fro") / (npl.norm(X1, "fro") + 1e-18))
+    return (rel <= rtol), {"resid_rel": rel}
+
+# --- NEW: DT Markov-parameter match ----------------------------------
+def markov_params_dt(Ad, Bd, kmax: int):
+    M = []
+    Ak = np.eye(Ad.shape[0])
+    for _ in range(kmax):
+        M.append(Ak @ Bd)
+        Ak = Ad @ Ak
+    return M
+
+def markov_match_dt(Ad, Bd, Ahat, Bhat, kmax: int, rtol: float = 1e-2):
+    M  = markov_params_dt(Ad, Bd, kmax)
+    Mh = markov_params_dt(Ahat, Bhat, kmax)
+    errs = [float(npl.norm(Mh[k]-M[k],"fro") / (npl.norm(M[k],"fro")+1e-12)) for k in range(kmax)]
+    ok = (max(errs) <= rtol)
+    return ok, {"markov_errs": errs, "markov_err_max": float(max(errs))}
+

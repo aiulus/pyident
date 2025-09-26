@@ -32,7 +32,46 @@ def rademacher(n: int, m: int, rng: np.random.Generator) -> Tuple[np.ndarray, np
     return A, B
 
 
+def sparse_continuous_column(
+    n: int,
+    rng: np.random.Generator,
+    p_density: float = 0.5,
+) -> np.ndarray:
+    
+    v = rng.standard_normal((n, 1))
+    m = rng.binomial(1, p_density, size=(n, 1)).astype(float)
+    return v * m
+
+
 def sparse_continuous(
+    n: int,
+    m: int,
+    rng: np.random.Generator,
+    which: Literal["A", "B", "both"] = "both",
+    p_density: float = 0.5,
+    p_density_A: Optional[float] = None,
+    p_density_B: Optional[float] = None,
+    check_zero_rows: bool = False,
+    max_attempts: int = 200,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Signature from _nonzero_bias kept for backward compatibility.
+    """
+    p_density_A = p_density_A if p_density_A is not None else p_density
+    p_density_B = p_density_B if p_density_B is not None else p_density
+
+    A = rng.standard_normal((n, n))
+    B = rng.standard_normal((n, m))
+
+    A_mask = rng.binomial(1, p_density_A, size=(n,n)).astype(float)
+    B_mask = rng.binomial(1, p_density_B, size=(n,m)).astype(float)
+
+    A *= A_mask
+    B *= B_mask
+
+    return A, B
+
+def sparse_continuous_nonzero_bias(
     n: int,
     m: int,
     rng: np.random.Generator,
