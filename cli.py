@@ -338,7 +338,7 @@ def main():
             except Exception:
                 raise RuntimeError("JAX requested via --use-jax but not available.")
 
-        from .experiments.underactuation import sweep_underactuation
+        from .discarded.underactuation import sweep_underactuation
 
         m_values = _parse_int_list(a.m_values)
         seeds = _parse_int_list(a.seeds)
@@ -380,7 +380,7 @@ def main():
             except Exception:
                 raise RuntimeError("JAX requested via --use-jax but not available.")
 
-        from .experiments.sparsity import sweep_sparsity
+        from .discarded.sparsity import sweep_sparsity
             
         p_values = _parse_float_list(a.p_values)
         seeds = _parse_int_list(a.seeds)
@@ -419,7 +419,7 @@ def main():
                 jxa.enable_x64(bool(a.jax_x64))
             except Exception:
                 raise RuntimeError("JAX requested via --use-jax but not available.")
-        from .experiments.underactuation import sweep_underactuation_plus
+        from .discarded.underactuation import sweep_underactuation_plus
         from .io_utils import save_json
         res = sweep_underactuation_plus(
             n=a.n,
@@ -445,7 +445,7 @@ def main():
                 jxa.enable_x64(bool(a.jax_x64))
             except Exception:
                 raise RuntimeError("JAX requested via --use-jax but not available.")
-        from .experiments.sparsity import sweep_sparsity_plus
+        from .discarded.sparsity import sweep_sparsity_plus
         from .io_utils import save_json
         res = sweep_sparsity_plus(
             n=a.n,

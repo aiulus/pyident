@@ -25,13 +25,14 @@ class SolverOpts:
 
 @dataclass
 class ExpConfig:
-    """Experiment configuration (single run)."""
+    """Base configuration for an identification experiment."""
     n: int = 10
-    m: int = 3
-    T: int = 400 # time steps
-    dt: float = 0.02 # sampling step      
+    m: int = 4
+    T: int = 200
+    dt: float = 0.01
+    seed: int = 42  
 
-    ensemble: Literal["ginibre", "sparse", "stable", "binary"] = "ginibre"
+    ensemble: str = 'A_stbl_B_ctrb'
 
     # --- Sparse–continuous ensemble options ---
     p_density: float = 0.8                      
@@ -84,3 +85,19 @@ class RunMeta:
     seed: int
     version: str = "0.1.0"
     extra: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ExperimentConfig(ExpConfig):
+    """Extended configuration for identification experiments."""
+    q_filter: float = 0.7  # quantile threshold for filtering
+    dwell: int = 1        # PRBS dwell time
+    u_scale: float = 5.0  # input scaling
+    noise_std: float = 0.0  # measurement noise
+    n_trials: int = 200   # number of trials
+    T: int = 200         # trajectory length
+    
+    def __post_init__(self):
+        super().__post_init__()
+        if not hasattr(self, 'seed'):
+            self.seed = 42

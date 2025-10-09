@@ -15,24 +15,27 @@ Unidentifiability vs. input dimension m *and* density p (sparse CT ensemble).
       - CSV summaries (long + wide)
 """
 from __future__ import annotations
+from typing import Dict, Any
 import argparse, math, sys, pathlib
 import numpy as np, pandas as pd
 import matplotlib.pyplot as plt
 
-from ..metrics import(
-    pbh_margin_structured,
-    unified_generator,
-    left_eigvec_overlap,
-    cont2discrete_zoh
-)
-from ..estimators import(
-    dmdc_pinv, 
-    moesp_fit,
-    sindy_fit,
-    node_fit
-)
-from ..ensembles import draw_with_ctrb_rank, sparse_continuous  
-from ..metrics import pair_distance
+from ..config import ExperimentConfig
+from ..ensembles import draw_with_ctrb_rank, sparse_continuous
+from ..metrics import cont2discrete_zoh, pbh_margin_structured
+from ..simulation import simulate_dt, prbs
+from ..plots import plot_density_heatmap
+
+@dataclass
+class DensitySweepConfig(ExperimentConfig):
+    """Configuration for density sweep experiments."""
+    n_min: int = 4
+    n_max: int = 12
+    density_min: float = 0.1
+    density_max: float = 0.9
+    n_density_points: int = 20
+    trials_per_point: int = 50
+    outdir: str = "out_density_sweep"
 
 def unit(v):
     n = np.linalg.norm(v);  return v / (n if n>0 else 1.0)
@@ -135,6 +138,64 @@ def run(n=5, m_min=1, m_max=10, trials_per_cell=200,
     heatmap(P_mu,  f"Unidentifiable fraction by μ_min==0\n n={n}, N={trials_per_cell}/cell, tol={tol:g}", "heatmap_mu_densityxpng")
 
     return out
+
+def run_one_trial(n: int, 
+                 density: float, 
+                 cfg: DensitySweepConfig, 
+                 rng: np.random.Generator) -> Dict[str, Any]:
+    """Run single trial with given dimension and density."""
+    # Generate sparse system
+    A = sparse_continuous(n, density, rng)
+    B = rng.standard_normal((n, cfg.m))
+    Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
+    
+    # Generate input and simulate
+    U = prbs(cfg.m, cfg.T, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
+    x0 = rng.standard_normal(n)
+    x0 /= np.linalg.norm(x0)
+    
+    X = simulate_dt(cfg.T, x0, Ad, Bd, U, noise_std=cfg.noise_std, rng=rng)
+    
+    # Identify
+    X0, X1 = X[:, :-1], X[:, 1:]
+    Ahat, Bhat = dmdc_tls(X0, X1, U)
+    
+    return {
+        "n": n,
+        "density": density,
+        "errA": np.linalg.norm(Ahat - Ad, 'fro'),
+        "errB": np.linalg.norm(Bhat - Bd, 'fro'),
+        "margin": pbh_margin_structured(Ad, Bd, x0)
+    }
+
+def run_experiment(cfg: DensitySweepConfig) -> pd.DataFrame:
+    """Run complete density sweep experiment."""
+    rng = np.random.default_rng(cfg.seed)
+    results = []
+    
+    n_vals = range(cfg.n_min, cfg.n_max + 1)
+    densities = np.linspace(cfg.density_min, cfg.density_max, cfg.n_density_points)
+    
+    for n in n_vals:
+        for density in densities:
+            for _ in range(cfg.trials_per_point):
+                result = run_one_trial(n, density, cfg, rng)
+                results.append(result)
+    
+    df = pd.DataFrame(results)
+    
+    # Save results
+    outdir = Path(cfg.outdir)
+    outdir.mkdir(exist_ok=True)
+    df.to_csv(outdir / "density_sweep.csv", index=False)
+    
+    # Generate heatmap
+    plot_density_heatmap(
+        df, 
+        save_path=outdir / "density_heatmap.png"
+    )
+    
+    return df
 
 def main():
     ap = argparse.ArgumentParser()

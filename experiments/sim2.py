@@ -12,7 +12,7 @@ Pipeline (mirrors your earlier experiment, now for ROC):
         s_mu   = 1 / μ_min(A,[x0 B])                        (↑ = more likely UNidentifiable)
   5) Compute error labels from estimation outcomes (ground truth from data):
         errA_* = ||Â - A_d||_F / ||A_d||_F
-        errB_* = ||\hat B - B_d||_F / ||B_d||_F
+        errB_* = ||hat B - B_d||_F / ||B_d||_F
         err_mean_* = 0.5*(errA_* + errB_*)     # default target for ROC
      Then set y=1 (UNidentifiable) if err_target > τ  (τ can be absolute or quantile-based).
   6) ROC: vary the threshold over score s and compute TPR/FPR vs the fixed y labels.
@@ -217,7 +217,7 @@ def main():
     ap.add_argument('--target', type=str, default='mean', choices=['A','B','mean'])
     ap.add_argument('--label-mode', type=str, default='q', choices=['abs','q'])
     ap.add_argument('--label-thr', type=float, default=0.70, help='abs: threshold value; q: quantile in [0,1]')
-    ap.add_argument('--outdir', type=str, default='/mnt/data/roc_from_estimation_demo')
+    ap.add_argument('--outdir', type=str, default='roc_from_estimation_demo')
     ap.add_argument('--roc-step', type=float, default=0.2, help='Step size for ROC threshold sweep')
     args = ap.parse_args()
     out = run(n=args.n, m=args.m, T=args.T, dt=args.dt, trials=args.trials,

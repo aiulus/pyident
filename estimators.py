@@ -2,17 +2,15 @@
 from __future__ import annotations
 from typing import Optional, Tuple
 import numpy as np
-# Add to your script or estimators.py
 import pysindy
-# Minimal NODE wrapper (add to your script or estimators.py)
 import torch
 from torchdiffeq import odeint
 
 
 class NODE(torch.nn.Module):
-    def __init__(self, n, m):
+    def __init__(self, n, m, bias=False):
         super().__init__()
-        self.fc = torch.nn.Linear(n + m, n)
+        self.fc = torch.nn.Linear(n + m, n, bias=bias)
 
     def forward(self, t, x_and_u):
         return self.fc(x_and_u)
@@ -21,7 +19,7 @@ def node_fit(Xtrain, Xp, Utrain, dt, epochs=100):
     n, T = Xtrain.shape
     m = Utrain.shape[0]
     device = 'cpu'
-    model = NODE(n, m).to(device)
+    model = NODE(n, m, bias=False).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
     Xtrain_torch = torch.tensor(Xtrain.T, dtype=torch.float32, device=device)
     Utrain_torch = torch.tensor(Utrain.T, dtype=torch.float32, device=device)
@@ -34,27 +32,47 @@ def node_fit(Xtrain, Xp, Utrain, dt, epochs=100):
         loss = torch.nn.functional.mse_loss(pred, Xp_torch)
         loss.backward()
         optimizer.step()
-    # Extract linear weights
-    W = model.fc.weight.detach().cpu().numpy()
-    b = model.fc.bias.detach().cpu().numpy()
+
+    # Extract linear weights (bias may be None if bias=False)
+    model.eval()
+    with torch.no_grad():
+        W = model.fc.weight.detach().cpu().numpy()
+        if model.fc.bias is None:
+            b = np.zeros(n, dtype=W.dtype)
+        else:
+            b = model.fc.bias.detach().cpu().numpy()
+
     # Split W into A, B
     A_node = W[:, :n]
     B_node = W[:, n:]
     return A_node, B_node
 
 
-def sindy_fit(Xtrain, Xp, Utrain, dt):
-    # Xtrain: (n, T), Xp: (n, T), Utrain: (m, T)
-    # Transpose to (T, n) and (T, m) for PySINDy
-    model = pysindy.SINDy(feature_library=pysindy.feature_library.PolynomialLibrary(degree=2))
-    Xtrain_T = Xtrain.T
-    Utrain_T = Utrain.T
-    model.fit(Xtrain_T, u=Utrain_T, t=dt)
-    # Extract identified A, B (linear part only)
-    coef = model.coefficients()
-    # If using PolynomialLibrary(degree=1), coef is [A | B]
-    # For higher degree, you may need to parse coef
-    return coef[:, :Xtrain.shape[0]], coef[:, Xtrain.shape[0]:]
+def sindy_fit(X, Xp, U, dt):
+    n, T = X.shape
+    X_all = np.hstack([X[:, :1], Xp])
+    Xdot = np.empty_like(X)
+    if T >= 2:
+        Xdot[:, :-1] = (X_all[:, 2:] - X_all[:, :-2]) / (2.0 * dt)
+        Xdot[:, 0] = (X_all[:, 1] - X_all[:, 0]) / dt
+        Xdot[:, -1] = (X_all[:, -1] - X_all[:, -2]) / dt
+    else:
+        Xdot[:, 0] = (X_all[:, 1] - X_all[:, -2]) / dt 
+
+    Z = np.vstack([X, U])
+    Theta = Xdot @ np.linalg.pinv(Z, rcond=1e-12)
+    return Theta[:, :n], Theta[:, n:]
+
+def sindy_fit_dt(X, U, dt, degree=1):
+    from pysindy import SINDy
+    from pysindy.feature_library import PolynomialLibrary
+    lib = PolynomialLibrary(degree=degree, include_bias=False)
+    model = SINDy(discrete_time=True, feature_library=lib)
+    model.fit(X.T, u=U.T, t=dt)
+    coef = model.coefficients()  # (n, n+m)
+    n = X.shape[0]
+    return coef[:, :n], coef[:, n:]
+
 
 # -----------------------------
 # 1) DMDc (minimum-norm pinv)
@@ -179,6 +197,86 @@ def moesp_fit(
     n_use = int(n if n is not None else X.shape[0])
     return moesp_fullstate(u_ts, x_ts, n=n_use, i=s, f=None, rcond=rcond)
 
+# ----------------------------------------------------
+# 4) Noise-sensitive DMDc variants (TLS, IV)
+# ----------------------------------------------------
+
+def dmdc_tls(X: np.ndarray, Xp: np.ndarray, U: np.ndarray,
+             rcond: float = 1e-12) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Row-wise scaled TLS for Xp ≈ Θ [X;U].
+    Column-scale the augmented matrix to improve conditioning; fallback to OLS if needed.
+    """
+    n = X.shape[0]
+    Z = np.vstack([X, U]).T                     # (T, n+m)
+    Y = Xp.T                                    # (T, n)
+
+    Theta = np.zeros((n, Z.shape[1]), dtype=X.dtype)
+    for j in range(n):
+        M = np.hstack([Z, Y[:, [j]]])          # (T, n+m+1)
+        # column scaling
+        scales = np.linalg.norm(M, axis=0)
+        scales[scales == 0.0] = 1.0
+        Ms = M / scales
+
+        _, _, Vt = np.linalg.svd(Ms, full_matrices=False)
+        v = Vt[-1, :] / scales                 # unscale
+
+        denom = v[-1]
+        if abs(denom) < 1e-12:
+            # fallback: ridge-OLS on this row
+            lam = 1e-6
+            G = (Z.T @ Z) + lam*np.eye(Z.shape[1])
+            theta_j = np.linalg.solve(G, Z.T @ Y[:, j])
+        else:
+            theta_j = -v[:-1] / denom
+        Theta[j, :] = theta_j
+
+    Ahat = Theta[:, :n]
+    Bhat = Theta[:, n:]
+    return Ahat, Bhat
+
+
+
+def _lag_stack(U: np.ndarray, L: int) -> np.ndarray:
+    # U: (m, T) → stack [u_{t-1}; …; u_{t-L}] for t=L..T-1 → (mL, T-L)
+    m, T = U.shape
+    return np.vstack([U[:, L-ell:T-ell] for ell in range(1, L+1)])
+
+def dmdc_iv(X: np.ndarray, Xp: np.ndarray, U: np.ndarray,
+            L: int = 1, instruments: Optional[np.ndarray] = None,
+            rcond: float = 1e-10) -> tuple[np.ndarray, np.ndarray]:
+    """
+    2SLS IV-DMDc:
+      1) Project regressors Z onto instrument space Π_Φ
+      2) OLS of Y on Z_hat
+    """
+    n, T = X.shape
+    assert Xp.shape[1] == T and U.shape[1] == T
+    if L < 1 or L >= T:
+        raise ValueError("L must be in [1, T-1].")
+
+    Y = Xp[:, L:]                               # (n, T-L)
+    Z = np.vstack([X[:, L-1:T-1], U[:, L-1:T-1]])  # ((n+m), T-L)
+
+    if instruments is None:
+        Phi = _lag_stack(U, L)                  # (mL, T-L)
+    else:
+        assert instruments.shape[1] == T, "instruments must have same time length as X"
+        Phi = instruments[:, L:]                # (p, T-L)
+
+    # Π_Φ in time domain
+    G = Phi @ Phi.T                             # (p, p)
+    Gp = np.linalg.pinv(G, rcond=rcond)         # robust if Phi low-rank
+    Pi = Phi.T @ Gp @ Phi                       # (T-L, T-L)
+
+    Zhat = Z @ Pi                               # project regressors onto instrument span
+
+    ZZ = Zhat @ Zhat.T                          # ((n+m), (n+m))
+    Theta = (Y @ Zhat.T) @ np.linalg.pinv(ZZ, rcond=rcond)
+
+    return Theta[:, :n], Theta[:, n:]
+
 
 # ----------------------------------------------------
 # 5) Identifiable-component projector (utility)
@@ -187,7 +285,7 @@ def project_identifiable(theta: np.ndarray, Z: np.ndarray, rcond: float = 1e-10)
     """
     Project parameter matrix Θ onto the identifiable component given regressors Z=[X;U].
     This right-multiplies by the projector onto col(Z):
-        P = Z Z^+   (shape (n+m)×(n+m)),
+        P = Z Z^+   (shape (n+m)x(n+m)),
     so Θ_ident = Θ P only alters directions that were not excited by the data.
     """
     P = Z @ np.linalg.pinv(Z, rcond=rcond)   # projector onto col(Z)

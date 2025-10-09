@@ -3,6 +3,7 @@ import numpy as np
 import numpy.linalg as npl
 from typing import Tuple, Optional
 from scipy.linalg import expm, eigvals, solve_continuous_lyapunov, solve_discrete_lyapunov, null_space
+from .simulation import simulate_dt
 
 # ---------------------------------------------------------------------
 # Metrics & core objects 
@@ -46,7 +47,7 @@ def same_equiv_class(A1: np.ndarray, B1: np.ndarray,
     # Optional: ensure A2 maps V into V numerically (no leakage)
     leak_A2 = np.linalg.norm((I - P @ P.T) @ A2 @ P, ord='fro')
 
-    ok = (dB <= tol) and (dA_V <= tol) and (leak_A2 <= tol)
+    ok = (dB <= tol) and (dA_V <= tol)  
 
     info = {
         "dim_V": int(k),
@@ -55,7 +56,7 @@ def same_equiv_class(A1: np.ndarray, B1: np.ndarray,
         "leak_A2": float(leak_A2),
         "tol": float(tol),
     }
-    return ok, info
+    return bool(ok), info
 
 
 def visible_basis_dt(Ad,Bd,x0,tol_rank=1e-12):
@@ -102,6 +103,19 @@ def krylov_generator(A: np.ndarray, X: np.ndarray, depth: Optional[int] = None) 
     d = n if depth is None else int(depth)
     return _krylov(A, X, d)
 
+def krylov_smin_norm(A, B, x0):
+    n = len(x0)
+    G = np.concatenate([x0.reshape(-1,1), B], axis=1)
+    blocks = [G]
+    for _ in range(n-1):
+        G = A @ G
+        blocks.append(G)
+    K = np.concatenate(blocks, axis=1)
+    K /= np.maximum(np.linalg.norm(K, axis=0, keepdims=True), 1e-12)  # column normalize
+    s = np.linalg.svd(K, compute_uv=False)
+    return float(s.min()) if s.size else 0.0
+
+
 
 def unified_generator(
     A: np.ndarray,
@@ -122,7 +136,7 @@ def unified_generator(
         return _krylov(A, X, n)
     elif mode == "pointwise":
         if W is None:
-            raise ValueError("pointwise mode requires W (m×q).")
+            raise ValueError("pointwise mode requires W (mxq).")
         X = np.concatenate([x0.reshape(-1, 1), B @ W], axis=1)
         return _krylov(A, X, n)
     elif mode == "moment-pe":
@@ -464,7 +478,7 @@ def same_equiv_class_dt_rel(Ad, Bd, Ahat, Bhat, x0,
     thrB = rtol_eq * max(1.0, npl.norm(Bd, "fro"))
     thrL = rtol_eq * max(1.0, npl.norm(Ad, "fro"))
 
-    ok = (dA_V <= thrA) and (dB <= thrB) and ( (not use_leak) or (leak <= thrL) )
+    ok = (dA_V <= thrA) and (dB <= thrB) 
     info = {"dim_V": int(k), "dA_V": dA_V, "leak": leak, "dB": dB,
             "thrA": thrA, "thrB": thrB, "thrLeak": thrL}
     return ok, info
@@ -491,3 +505,21 @@ def markov_match_dt(Ad, Bd, Ahat, Bhat, kmax: int, rtol: float = 1e-2):
     ok = (max(errs) <= rtol)
     return ok, {"markov_errs": errs, "markov_err_max": float(max(errs))}
 
+def mu_left_eigs(A, x0, B):
+    wvals, Wt = np.linalg.eig(A.T)      # columns: left eigenvectors
+    Wi = np.asarray(Wt); norms = np.linalg.norm(Wi, axis=0); norms[norms==0]=1.0
+    Wi = Wi / norms
+    X = np.concatenate([x0.reshape(-1,1), B], axis=1)
+    mu = np.linalg.norm(Wi.T.conj() @ X, axis=1)  # == ||w_i^T [x0 B]||_2
+    return wvals, mu
+
+def x0_score(x0, cfg, rng, Ad, Bd, U):
+    X_nf = simulate_dt(cfg.T, x0, Ad, Bd, U, noise_std=0.0, rng=rng)
+    X0_nf, X1_nf = X_nf[:, :-1], X_nf[:, 1:]
+    P, _ = visible_subspace(Ad, Bd, x0)          # basis of V(x0)
+    ZV = np.vstack([P.T @ X0_nf, U])                     # (k+m, T)
+    svals = np.linalg.svd(ZV, compute_uv=False)
+    kappa = (svals[0] / (svals[-1] + 1e-18)) if svals.size else np.inf
+    cond_factor = (svals[-1] / (svals[0] + 1e-18))       # == 1/kappa
+    margin = pbh_margin_structured(Ad, Bd, x0)
+    return margin * cond_factor

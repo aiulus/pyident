@@ -1,14 +1,14 @@
 """
-Back-compat shim for experiment sweeps.
+PyIdent experiment implementations.
 """
 
+from typing import List
 
-# Install dotted aliases: pyident.experiments.PEorder -> pyident._experiments
-import sys as _sys
-import pyident._experiments as _exp
-
-for _name in ("PEorder", "initstate", "sparsity", "underactuation",
-              "exp_ctrl_prbs", "exp_x0_unctrl"):
-    _sys.modules[__name__ + "." + _name] = _exp
-
-del _sys, _exp  # keep module clean
+# This is good practice and does not cause the warning.
+__all__: List[str] = [
+    'F1_x0_boxplot',
+    'sim_eqv_cl',
+    'sim_eqvcl_sweep',
+    'sim_undera',
+    'sim_sparse'
+]

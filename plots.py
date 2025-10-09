@@ -5,6 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 import os
+import pandas as pd
 
 _Number = Union[int, float, np.number]
 _Pathish = Union[str, os.PathLike]
@@ -92,11 +93,16 @@ def emit_pgfplots_tex(csv_path: str, tex_path: str, xlabel: str = r"\Re(\lambda)
     """
     Emit a minimal PGFPlots surface snippet that reads the CSV produced by write_sigma_grid_csv.
     """
-    content = rf"""\begin{tikzpicture}
-\begin{axis}[view={{0}}{{90}}, colorbar, xlabel={{{ {xlabel} }}}, ylabel={{{ {ylabel} }}}]
+    content = rf"""\documentclass{{standalone}}
+\usepackage{{pgfplots}}
+\pgfplotsset{{compat=1.18}}
+\begin{{document}}
+\begin{{tikzpicture}}
+\begin{{axis}}[view={{0}}{{90}}, colorbar, xlabel={{{ {xlabel} }}}, ylabel={{{ {ylabel} }}}]
 \addplot3[surf,shader=interp] table[x=alpha,y=beta,z=sigma,col sep=comma] {{{csv_path}}};
-\end{axis}
-\end{tikzpicture}
+\end{{axis}}
+\end{{tikzpicture}}
+\end{{document}}
 """
     with open(tex_path, "w") as f:
         f.write(content)
@@ -127,8 +133,8 @@ def plot_rank_bars(labels: Sequence[str],
 
 def plot_histogram(data: Sequence[_Number],
                    bins: int = 20,
-                   out_png: _Pathish = None,
-                   out_pdf: _Pathish = None,
+                   out_png: Optional[_Pathish] = None,
+                   out_pdf: Optional[_Pathish] = None,
                    title: Optional[str] = None,
                    xlabel: Optional[str] = None):
     """
@@ -210,8 +216,8 @@ def plot_pe_ladder(depths: Sequence[int],
 
 # ----------- 3) Scatter: projected error vs. metric (+binned bands) ----------
 def scatter_error_vs_metric(
-    x: Sequence[float],
-    y_by_alg: Dict[str, Sequence[float]],
+    x: Union[Sequence[float], np.ndarray],
+    y_by_alg: Dict[str, Union[Sequence[float], np.ndarray]],
     xlabel: str = r"$\delta_{\mathrm{PBH}}$",
     ylabel: str = r"$\|P_V(\hat A-A)P_V\|_F$",
     bins: int = 20,
@@ -315,7 +321,7 @@ def heatmap_visible_dim(x_ticks: Sequence,
     Z = np.asarray(Z)
     fig, ax = plt.subplots()
     im = ax.imshow(Z, origin="lower", aspect="auto",
-                   extent=[0, len(x_ticks), 0, len(y_ticks)])
+                   extent=(0, len(x_ticks), 0, len(y_ticks)))
     cbar = fig.colorbar(im); cbar.set_label(cbar_label)
     ax.set_xticks(np.arange(len(x_ticks)) + 0.5); ax.set_xticklabels(x_ticks, rotation=30)
     ax.set_yticks(np.arange(len(y_ticks)) + 0.5); ax.set_yticklabels(y_ticks)
@@ -352,10 +358,11 @@ def eig_overlay(true_eigs: Sequence[complex],
     """
     fig, ax = plt.subplots()
     tr = np.asarray(true_eigs, dtype=complex)
-    ax.scatter(tr.real, tr.imag, c="k", s=30, label="true")
+    tr_arr = np.asarray(tr, dtype=np.complex128)
+    ax.scatter(tr_arr.real, tr_arr.imag, c="k", s=30, label="true")
     for name, vals in est_eigs_by_alg.items():
-        v = np.asarray(vals, dtype=complex)
-        ax.scatter(v.real, v.imag, s=22, alpha=0.7, label=name)
+        v_arr = np.asarray(vals, dtype=np.complex128)
+        ax.scatter(v_arr.real, v_arr.imag, s=22, alpha=0.7, label=name)
     if unit_circle:
         th = np.linspace(0, 2*np.pi, 400)
         ax.plot(np.cos(th), np.sin(th), "k:", lw=1)
@@ -379,8 +386,8 @@ def branch_proportions(counts: Dict[str, int],
     return _save_or_return(fig, ax, out_png, out_pdf)
 
 # -------------------- 10) Success-rate vs metric bin curve -------------------
-def success_rate_curve(metric: Sequence[float],
-                       error: Sequence[float],
+def success_rate_curve(metric: Union[Sequence[float], np.ndarray],
+                       error: Union[Sequence[float], np.ndarray],
                        thresh: float,
                        bins: int = 15,
                        xlabel: str = r"$\delta_{\mathrm{PBH}}$",
@@ -434,7 +441,7 @@ def model_output_overlay(t: Sequence[float],
     ax.grid(True, ls="--", alpha=0.3); ax.legend()
     return _save_or_return(fig, ax, out_png, out_pdf)
 
-def residual_autocorr(e: Sequence[float], max_lag: int = 60,
+def residual_autocorr(e: Union[Sequence[float], np.ndarray], max_lag: int = 60,
                       out_png: Optional[str] = None, out_pdf: Optional[str] = None):
     """
     Simple residual ACF with +/- 1.96/sqrt(N) bounds (white-noise check).
@@ -452,7 +459,7 @@ def residual_autocorr(e: Sequence[float], max_lag: int = 60,
         acf.append(num/den if den > 0 else np.nan)
     acf = np.array(acf)
     fig, ax = plt.subplots()
-    ax.stem(range(len(acf)), acf, use_line_collection=True)
+    ax.stem(range(len(acf)), acf)
     ci = 1.96/np.sqrt(max(1, N))
     ax.axhspan(-ci, ci, color="k", alpha=0.1, lw=0)
     ax.set_xlabel("lag"); ax.set_ylabel("ACF")
@@ -490,4 +497,315 @@ def plot_with_band(x: np.ndarray, y_mean: np.ndarray, y_lo: np.ndarray, y_hi: np
     fig.tight_layout()
     fig.savefig(out_png, dpi=200); fig.savefig(out_pdf)
     plt.close(fig)
+
+def plot_ecdf(groups, labels, title="ECDF of parameter MSE", out_png=None, out_pdf=None):
+    import numpy as np, matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(6.5,4))
+    for x, lab in zip(groups, labels):
+        xs = np.sort(x)
+        ys = np.arange(1, len(xs)+1)/len(xs)
+        ax.step(xs, ys, where='post', label=lab)
+    ax.set_xscale('log')
+    ax.set_xlabel("parameter MSE (A,B)")
+    ax.set_ylabel("ECDF")
+    ax.grid(True, which='both', alpha=0.3)
+    ax.legend()
+    ax.set_title(title)
+    plt.tight_layout()
+    if out_png or out_pdf:
+        if out_png: fig.savefig(out_png, dpi=150)
+        if out_pdf: fig.savefig(out_pdf)
+        plt.close(fig)
+        return None
+    return fig, ax
+
+def plot_violin_swarm(msr, msf, title="MSE distribution (violin + swarm)", out_png=None, out_pdf=None):
+    import numpy as np, matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(6.5,4))
+    data = [msr, msf]
+    parts = ax.violinplot(data, showextrema=False)
+    for pc in list(parts['bodies']): pc.set_alpha(0.5)
+    for i, x in enumerate(data, start=1):
+        jitter = np.random.default_rng(0).normal(i, 0.04, size=len(x))
+        ax.plot(jitter, x, 'o', alpha=0.35, markersize=3)
+    ax.set_yscale('log')
+    ax.set_xticks([1,2]); ax.set_xticklabels(["random x0", "filtered x0"])
+    ax.set_ylabel("parameter MSE (A,B)")
+    ax.set_title(title); ax.grid(True, axis='y', alpha=0.3)
+    plt.tight_layout()
+    if out_png or out_pdf:
+        if out_png: fig.savefig(out_png, dpi=150)
+        if out_pdf: fig.savefig(out_pdf)
+        plt.close(fig)
+        return None
+    return fig, ax
+
+def plot_effect_size(msr, msf, stat=np.median, n_boot=5000, seed=0,
+                     title="Effect size (filtered − random)", out_png=None, out_pdf=None):
+    import numpy as np, matplotlib.pyplot as plt
+    rng = np.random.default_rng(seed)
+    boots = []
+    for _ in range(n_boot):
+        s1 = rng.choice(msr, size=len(msr), replace=True)
+        s2 = rng.choice(msf, size=len(msf), replace=True)
+        boots.append(stat(s2) - stat(s1))
+    boots = np.array(boots)
+    diff = stat(msf) - stat(msr)
+    lo, hi = np.quantile(boots, [0.025, 0.975])
+
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(8,4), gridspec_kw={'width_ratios':[3,2]})
+    for i, x in enumerate([msr, msf], start=1):
+        jitter = rng.normal(i, 0.04, size=len(x))
+        axL.plot(jitter, x, 'o', alpha=0.35, markersize=3)
+        axL.hlines(stat(x), i-0.2, i+0.2)
+    axL.set_yscale('log'); axL.set_xticks([1,2]); axL.set_xticklabels(["random", "filtered"])
+    axL.set_ylabel("parameter MSE (A,B)"); axL.grid(True, axis='y', alpha=0.3)
+
+    axR.axvline(0, ls='--', alpha=0.5)
+    axR.errorbar([diff], [0], xerr=[[diff-lo],[hi-diff]], fmt='o')
+    axR.set_xlabel(f"{stat.__name__} difference")
+    axR.set_yticks([]); axR.set_title(title); axR.grid(True, axis='x', alpha=0.3)
+    plt.tight_layout()
+    if out_png or out_pdf:
+        if out_png: fig.savefig(out_png, dpi=150)
+        if out_pdf: fig.savefig(out_pdf)
+        plt.close(fig)
+        return None
+    return fig, (axL, axR)
+
+def plot_margin_scatter(msr, msf, mR, mF, tau, title="PBH margin vs MSE", out_png=None, out_pdf=None):
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(6.5,4))
+    ax.scatter(mR, msr, s=12, alpha=0.5, label="random x0")
+    ax.scatter(mF, msf, s=12, alpha=0.6, label="filtered x0")
+    ax.axvline(tau, ls='--', alpha=0.7, label=f"τ (q-filter)")
+    ax.set_xscale('log'); ax.set_yscale('log')
+    ax.set_xlabel("structured PBH margin m(x0)")
+    ax.set_ylabel("parameter MSE (A,B)")
+    ax.grid(True, which='both', alpha=0.3); ax.legend()
+    ax.set_title(title)
+    plt.tight_layout()
+    if out_png or out_pdf:
+        if out_png: fig.savefig(out_png, dpi=150)
+        if out_pdf: fig.savefig(out_pdf)
+        plt.close(fig)
+        return None
+    return fig, ax
+
+def plot_shift_function(msr, msf, title="Quantile shift: filtered − random", out_png=None, out_pdf=None):
+    import numpy as np, matplotlib.pyplot as plt
+    qs = np.linspace(0.05, 0.95, 19)
+    qR = np.quantile(msr, qs); qF = np.quantile(msf, qs)
+    fig, ax = plt.subplots(figsize=(6.5,4))
+    ax.plot(qs, (qF - qR), marker='o')
+    ax.axhline(0, ls='--', alpha=0.5)
+    ax.set_ylabel("Δ quantile (absolute)"); ax.set_xlabel("quantile q")
+    ax.set_title(title); ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    if out_png or out_pdf:
+        if out_png: fig.savefig(out_png, dpi=150)
+        if out_pdf: fig.savefig(out_pdf)
+        plt.close(fig)
+        return None
+    return fig, ax
+
+def plot_ok_rate_vs_noise(
+    csv_path,
+    algos=None,
+    dwell=None,
+    T=None,
+    ax=None,
+    legend_loc="best",
+    title="Mean Equivalence Membership vs. Noise",
+    ylabel="Mean Equivalence Membership (ok_rate)",
+    xlabel="Noise Std",
+    save_path=None,
+    **kwargs
+):
+    """Plot mean equivalence membership (ok_rate) vs. noise for each algorithm."""
+    df = pd.read_csv(csv_path)
+    if dwell is not None:
+        df = df[df["dwell"] == dwell]
+    if T is not None:
+        df = df[df["T"] == T]
+    if algos is None:
+        algos = sorted(df["algo"].unique())
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(6,4))
+
+    for algo in algos:
+        sub = df[df["algo"] == algo]
+        sub = sub.sort_values("noise_std")
+        ax.plot(sub["noise_std"], sub["ok_rate"], marker="o", label=algo, **kwargs)
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.legend(loc=legend_loc)
+    ax.grid(True, alpha=0.3)
+
+    if save_path:
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=150)
+        print(f"Saved plot to {save_path}")
+    elif ax is None:
+        plt.show()
+
+    return ax
+
+def plot_ok_rate_vs_noise_batched(
+    csv_path,
+    algo_batches,
+    batch_labels=None,
+    dwell=None,
+    T=None,
+    save_path=None,
+):
+    """Plot ok_rate vs noise in multi-row layout, one row per algorithm batch."""
+    df = pd.read_csv(csv_path)
+    if dwell is not None:
+        df = df[df["dwell"] == dwell]
+    if T is not None:
+        df = df[df["T"] == T]
+
+    n_batches = len(algo_batches)
+    fig, axs = plt.subplots(n_batches, 1, figsize=(7, 3.2 * n_batches), sharex=True)
+    if n_batches == 1:
+        axs = [axs]
+    if batch_labels is None:
+        batch_labels = [f"Batch {i+1}" for i in range(n_batches)]
+
+    for i, (batch, label) in enumerate(zip(algo_batches, batch_labels)):
+        ax = axs[i]
+        for algo in batch:
+            sub = df[df["algo"] == algo]
+            if sub.empty:
+                continue
+            sub = sub.sort_values("noise_std")
+            ax.plot(sub["noise_std"], sub["ok_rate"], marker="o", label=algo)
+        ax.set_ylabel("OK rate")
+        ax.set_title(label)
+        ax.set_ylim(0, 1)
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+
+    axs[-1].set_xlabel("Noise Std")
+    fig.suptitle("Mean Equivalence Membership vs. Noise (Batched Algorithms)")
+    plt.tight_layout(rect=(0, 0, 1, 0.97))
+    if save_path:
+        plt.savefig(save_path, dpi=150)
+        print(f"Saved plot to {save_path}")
+    else:
+        plt.show()
+    return fig
+
+def plot_consistency_sweep(csv_path: str, save_path: Optional[str] = None) -> Optional[str]:
+    """
+    Plot 3-panel consistency sweep summary:
+    (a) ok_rate vs noise_std (per algo)
+    (b) ok_rate vs dwell     (per algo)
+    (c) ok_rate vs T         (per algo)
+    """
+    df = pd.read_csv(csv_path)
+    algos = sorted(df["algo"].unique())
+
+    def _agg(x, by):
+        g = x.groupby(by)["ok_rate"].mean().reset_index()
+        return g
+
+    noise_plot = _agg(df, ["algo", "noise_std"])
+    dwell_plot = _agg(df, ["algo", "dwell"])
+    T_plot     = _agg(df, ["algo", "T"])
+
+    fig, axs = plt.subplots(1, 3, figsize=(15, 4.2), constrained_layout=True)
+
+    ax = axs[0]; ax.set_title("OK rate vs noise")
+    for a in algos:
+        g = noise_plot[noise_plot["algo"] == a]
+        ax.plot(g["noise_std"], g["ok_rate"], marker="o", label=a)
+    ax.set_xlabel("noise std"); ax.set_ylabel("OK rate")
+    ax.set_ylim(0, 1); ax.grid(True); ax.legend()
+
+    ax = axs[1]; ax.set_title("OK rate vs dwell (higher dwell ≈ lower PE)")
+    for a in algos:
+        g = dwell_plot[dwell_plot["algo"] == a]
+        ax.plot(g["dwell"], g["ok_rate"], marker="o", label=a)
+    ax.set_xlabel("dwell"); ax.set_ylabel("OK rate")
+    ax.set_ylim(0, 1); ax.grid(True)
+
+    ax = axs[2]; ax.set_title("OK rate vs trajectory length T")
+    for a in algos:
+        g = T_plot[T_plot["algo"] == a]
+        ax.plot(g["T"], g["ok_rate"], marker="o", label=a)
+    ax.set_xlabel("T"); ax.set_ylabel("OK rate")
+    ax.set_ylim(0, 1); ax.grid(True)
+
+    if save_path:
+        fig.savefig(save_path, dpi=180)
+        plt.close(fig)
+        return save_path
+    
+    return None
+
+def plot_sparsity_summary(
+    df: pd.DataFrame,
+    save_path: Optional[_Pathish] = None,
+    figsize: Tuple[float, float] = (12, 4)
+) -> Optional[Tuple[plt.Figure, np.ndarray]]:
+    """
+    Plot summary of sparsity experiment results.
+    
+    Args:
+        df: DataFrame with columns ['density', 'errA', 'errB', 'sparsity_A', 'sparsity_Ahat']
+        save_path: Path to save the plot (optional)
+        figsize: Figure size (width, height)
+        
+    Returns:
+        (fig, axs) tuple if save_path is None, otherwise None
+    """
+    fig, axs = plt.subplots(1, 3, figsize=figsize)
+    
+    # Plot 1: Error vs Target Density
+    ax = axs[0]
+    df.groupby('density').agg({
+        'errA': ['mean', 'std'],
+        'errB': ['mean', 'std']
+    }).plot(y=[('errA', 'mean'), ('errB', 'mean')],
+            yerr=[('errA', 'std'), ('errB', 'std')],
+            ax=ax, marker='o')
+    ax.set_xlabel('Target Density')
+    ax.set_ylabel('Error (Frobenius)')
+    ax.set_title('Identification Error vs Density')
+    ax.grid(True, alpha=0.3)
+    
+    # Plot 2: Achieved vs Target Density
+    ax = axs[1]
+    ax.scatter(df['density'], df['sparsity_A'], 
+              alpha=0.5, label='True A')
+    ax.scatter(df['density'], df['sparsity_Ahat'],
+              alpha=0.5, label='Estimated A')
+    ax.plot([0, 1], [0, 1], 'k--', alpha=0.5)
+    ax.set_xlabel('Target Density')
+    ax.set_ylabel('Achieved Density')
+    ax.set_title('Achieved vs Target Density')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # Plot 3: Error Distribution
+    ax = axs[2]
+    sns.boxplot(data=df, x='density', y='errA', ax=ax)
+    ax.set_xlabel('Target Density')
+    ax.set_ylabel('Error A (Frobenius)')
+    ax.set_title('Error Distribution')
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        return None
+    
+    return fig, axs
 

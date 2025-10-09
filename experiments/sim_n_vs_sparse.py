@@ -93,7 +93,7 @@ def run(n_min=1, n_max=50, p_start=0.05, p_end=1.0, p_step=0.05,
 
     # Heatmap (density x n)
     plt.figure(figsize=(10.0, 6.2))
-    extent=[n_min-0.5, n_max+0.5, p_start-0.05, p_end+0.05]
+    extent = (n_min-0.5, n_max+0.5, p_start-0.05, p_end+0.05)
     im = plt.imshow(P_any, origin="lower", aspect="auto", extent=extent, cmap="viridis")
     cbar = plt.colorbar(im); cbar.set_label("% unidentifiable (PBH==0 OR μ_min==0)")
     plt.xlabel("State dimension n (size(A,1))")

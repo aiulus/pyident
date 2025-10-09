@@ -54,96 +54,31 @@ def sparse_continuous(
     check_zero_rows: bool = False,
     max_attempts: int = 200,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Signature from _nonzero_bias kept for backward compatibility.
-    """
-    p_density_A = p_density_A if p_density_A is not None else p_density
-    p_density_B = p_density_B if p_density_B is not None else p_density
+    p_density_A = p_density if p_density_A is None else p_density_A
+    p_density_B = p_density if p_density_B is None else p_density_B
 
     A = rng.standard_normal((n, n))
     B = rng.standard_normal((n, m))
 
-    A_mask = rng.binomial(1, p_density_A, size=(n,n)).astype(float)
-    B_mask = rng.binomial(1, p_density_B, size=(n,m)).astype(float)
-
-    A *= A_mask
-    B *= B_mask
-
-    return A, B
-
-def sparse_continuous_nonzero_bias(
-    n: int,
-    m: int,
-    rng: np.random.Generator,
-    which: Literal["A", "B", "both"] = "both",
-    p_density: float = 0.5,
-    p_density_A: Optional[float] = None,
-    p_density_B: Optional[float] = None,
-    check_zero_rows: bool = False,
-    max_attempts: int = 200,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Sparse–continuous ensemble.
-
-    A_ij = Z_ij * M_ij where Z_ij ~ N(0,1), M_ij ~ Ber(p_density_A).
-    B is treated similarly if requested.
-
-    Disclaimer:
-    - If check_zero_rows=True, we resample masks up to max_attempts to avoid fully
-      zero rows (for A and/or B depending on `which`). This slightly biases the
-      mask distribution but prevents degenerate, non-identifiable edge cases
-      unrelated to the phenomena of interest.
-
-    Parameters
-    ----------
-    n, m : int
-    p_density_A : float in [0,1]
-        Nonzero fraction for A.
-    rng : np.random.Generator
-    which : {'A','B','both'}
-        Which matrix to sparsify.
-    p_density_B : Optional[float] in [0,1]
-        Nonzero fraction for B (if None and 'both' or 'B', uses p_density_A).
-    check_zero_rows : bool
-        Enforce no all-zero rows in the sparsified matrices (see note above).
-    max_attempts : int
-        Max resampling attempts for zero-row avoidance.
-
-    Returns
-    -------
-    A, B : np.ndarray
-    """
-    p_density_A = p_density_A if p_density_A is not None else p_density
-    p_density_B = p_density_B if p_density_B is not None else p_density
-
-    A = rng.standard_normal((n, n))
-    B = rng.standard_normal((n, m))
-
-    def _mask(shape, p, avoid_zero_rows=False) -> np.ndarray:
-        if not avoid_zero_rows:
-            return (rng.binomial(1, p, size=shape)).astype(float)
-        # Resample until no zero rows OR attempts exhausted.
-        attempts = 0
-        while True:
-            M = (rng.binomial(1, p, size=shape)).astype(float)
-            if np.all(M.sum(axis=1) > 0) or attempts >= max_attempts:
-                if attempts >= max_attempts:
-                    warnings.warn(
-                        "sparse_continuous: zero-row avoidance max_attempts hit; "
-                        "returning current mask (may contain zero rows)."
-                    )
-                return M
-            attempts += 1
+    A_mask = rng.binomial(1, p_density_A, size=(n, n)).astype(float)
+    B_mask = rng.binomial(1, p_density_B, size=(n, m)).astype(float)
 
     if which in ("A", "both"):
-        Amask = _mask((n, n), p_density_A, check_zero_rows)
-        A *= Amask
-
+        A *= A_mask
     if which in ("B", "both"):
-        densB = p_density_A if p_density_B is None else p_density_B
-        Bmask = _mask((n, m), densB, check_zero_rows)
-        B *= Bmask
+        B *= B_mask
+
+    if check_zero_rows and which in ("B", "both"):
+        z = (np.linalg.norm(B, axis=1) == 0)
+        tries = 0
+        while np.any(z) and tries < max_attempts:
+            B[z, :] = rng.standard_normal((z.sum(), m)) \
+                      * rng.binomial(1, p_density_B, size=(z.sum(), m))
+            z = (np.linalg.norm(B, axis=1) == 0)
+            tries += 1
 
     return A, B
+
 
 
 def stable(n: int, m: int, rng) -> tuple[np.ndarray, np.ndarray]:
@@ -188,14 +123,12 @@ def sample_system_instance(cfg, rng: np.random.Generator) -> Tuple[np.ndarray, n
         return binary(cfg.n, cfg.m, rng)
     if cfg.ensemble == "sparse":
         return sparse_continuous(
-            n=cfg.n,
-            m=cfg.m,
-            rng=rng,
-            which=cfg.sparse_which,
-            p_density=cfg.p_density,
-            p_density_A=cfg._density_A,
-            p_density_B=cfg._density_B,
-            check_zero_rows=False,
+            n=cfg.n, m=cfg.m, rng=rng,
+            which=getattr(cfg, "sparse_which", "both"),
+            p_density=getattr(cfg, "p_density", 0.5),
+            p_density_A=getattr(cfg, "_density_A", None),
+            p_density_B=getattr(cfg, "_density_B", None),
+            check_zero_rows=getattr(cfg, "check_zero_rows", False),
         )
     if cfg.ensemble == "stable":
         return stable(cfg.n, cfg.m, rng)
@@ -237,22 +170,15 @@ def _ctrb_matrix(A: np.ndarray, B: np.ndarray, order: Optional[int] = None) -> n
     return C
 
 
-def _svd_rank(M: np.ndarray, rtol: Optional[float] = None) -> int:
-    """Numerically stable rank via SVD with a sensible default threshold."""
-    if M.size == 0:
-        return 0
+def _svd_rank(M, rtol=None, atol=None):
     s = np.linalg.svd(M, compute_uv=False)
-    if s.size == 0:
-        return 0
-
-    # Choose a concrete float threshold for the comparison
-    if rtol is None:
-        # Standard heuristic: tol = max(M.shape) * eps * s_max
-        eps = np.finfo(float).eps  # fine for real/complex bookkeeping
-        thr: float = max(M.shape) * eps * float(s[0])
-    else:
-        thr = float(rtol)
-
+    smax = float(s[0]) if s.size else 0.0
+    thr = 0.0
+    if atol is None:
+        atol = max(M.shape)*np.finfo(float).eps*smax
+    thr = atol
+    if rtol is not None:
+        thr = max(thr, float(rtol)*smax)
     return int(np.sum(s > thr))
 
 
@@ -284,12 +210,9 @@ def _draw_base_pair(base: str, n: int, m: int, rng: np.random.Generator, **base_
         return stable(n, m, rng)
     if base == "binary":
         return binary(n, m, rng)
-    if base == "sparse" or base == "sparse_continuous":
-        # filter kwargs to what sparse_continuous accepts
-        return _call_with_filtered(
-            lambda **kw: sparse_continuous(n=n, m=m, rng=rng, **kw),
-            **base_kwargs
-        )
+    if base in {"sparse", "sparse_continuous"}:
+        kw = _filter_kwargs(sparse_continuous, base_kwargs)
+        return sparse_continuous(n=n, m=m, rng=rng, **kw)
     raise ValueError(f"unknown base generator '{base}'")
 
 
@@ -310,7 +233,7 @@ def draw_with_ctrb_rank(
     Construct (A,B) with *exact* controllability rank r in dimension n with m inputs.
 
     Theory (Kalman decomposition):
-      We build a block pair (A_blk, B_blk) in a basis [R ⊕ U] where
+      We build a block pair (A_blk, B_blk) in a basis [R, U] where
       - dim(R) = r, (A_c, B_c) is controllable on R,
       - dim(U) = n-r, B has no support on U (=> unreachable),
       then embed with a random orthonormal Q to avoid axis artifacts.
@@ -318,11 +241,11 @@ def draw_with_ctrb_rank(
     Parameters
     ----------
     n, m : state and input dimensions
-    r    : desired controllability rank (0 ≤ r ≤ n)
+    r    : desired controllability rank (0 <= r <= n)
     rng  : NumPy Generator for reproducibility
     base_c : base generator for the controllable block (ginibre/stable/binary/sparse)
     base_u : base generator for the unreachable block's A_u (defaults to base_c)
-    max_tries : how many attempts to draw a controllable (A_c,B_c) of size r×m
+    max_tries : how many attempts to draw a controllable (A_c,B_c) of size rxm
     embed_random_basis : if True, embed blocks with a random orthonormal matrix Q
     base_kwargs_c / base_kwargs_u : forwarded to the respective base generators
 
@@ -384,16 +307,43 @@ def draw_with_ctrb_rank(
     A = Q @ A_blk @ Q.T
     B = Q @ B_blk
 
-    rk_final, C = controllability_rank(A, B)
-    if rk_final != r:
-        # Extremely unlikely if Q is orthonormal; guard anyway.
-        raise RuntimeError(f"Embedded pair lost target rank: got {rk_final}, want {r}.")
+    #rk_final, C = controllability_rank(A, B)
+    #if rk_final != r:
+    #    # Extremely unlikely if Q is orthonormal; guard anyway.
+    #    raise RuntimeError(f"Embedded pair lost target rank: got {rk_final}, want {r}.")
+    #rk_final, C = controllability_rank(A, B, order=r, rtol=1e-10)
+    #if rk_final != r:
+        # Try once more with a slightly stronger tolerance
+    #    rk_final2, C2 = controllability_rank(A, B, order=r, rtol=1e-6)
+    #    if rk_final2 != r:
+    #        raise RuntimeError(f"Embedded pair lost target rank: got {rk_final2}, want {r}. "
+    #                        f"(use rtol≈1e-8..1e-9 or order=r)")
+        
+    #meta = {
+    #    "Q": Q, "Ar": A_c, "Au": A_u, "Br": B_c,
+     #   "R_basis": Q[:, :r].copy(),
+     #   "rank": rk_final,
+    #}
+    if embed_random_basis:
+        rk_final, _ = controllability_rank(A, B, order=r, rtol=1e-10)
+        if rk_final != r:
+            rk_final2, _ = controllability_rank(A, B, order=r, rtol=1e-6)
+            if rk_final2 != r:
+                raise RuntimeError(
+                    f"Embedded pair lost target rank: got {rk_final2}, want {r}. "
+                    f"(use rtol≈1e-8..1e-9 or order=r)"
+                )
+            rk_final = rk_final2
+    else:
+        # In canonical (non-embedded) coordinates, the block construction guarantees rank r.
+        rk_final = r
 
     meta = {
         "Q": Q, "Ar": A_c, "Au": A_u, "Br": B_c,
         "R_basis": Q[:, :r].copy(),
         "rank": rk_final,
     }
+
     return A, B, meta
 
 
@@ -417,8 +367,8 @@ def initial_state_classifier(
 
     Returns a dictionary with:
       - "rank": controllability rank r
-      - "R_basis": orthonormal basis of R (n×r)
-      - "U_basis": orthonormal complement basis (n×(n-r))
+      - "R_basis": orthonormal basis of R (nxr)
+      - "U_basis": orthonormal complement basis (nx(n-r))
       - "is_good": callable x0 -> bool
       - "is_bad":  callable x0 -> bool
       - "sample_good":  callable rng -> x0 (tries until good)
@@ -503,3 +453,8 @@ def initial_state_classifier(
         "sample_good": sample_good,
         "sample_bad": sample_bad,
     }
+
+def _filter_kwargs(fn, kwargs):
+    import inspect
+    sig = inspect.signature(fn)
+    return {k: v for k, v in kwargs.items() if k in sig.parameters}

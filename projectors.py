@@ -1,0 +1,124 @@
+from __future__ import annotations
+from typing import Tuple, Optional
+import numpy as np
+from numpy.linalg import svd, norm
+
+EPS = 1e-12
+
+# ---------- basic LA helpers ----------
+def _svd_nullspace(M: np.ndarray, tol: Optional[float] = None) -> np.ndarray:
+    """
+    Orthonormal basis for ker(M) using SVD rank cut.
+    Works for tall/wide matrices. Returns n x k matrix (possibly k=0).
+    """
+    if M.size == 0:
+        return np.zeros((M.shape[1], 0))
+    U, S, Vt = np.linalg.svd(M, full_matrices=True)
+    if tol is None:
+        tol = max(M.shape) * np.finfo(float).eps * (S[0] if S.size else 1.0)
+    r = int(np.sum(S > tol))                # numerical rank
+    return Vt.T[:, r:]                      # the last n-r columns span ker(M)
+
+
+def _orth(A: np.ndarray) -> np.ndarray:
+    if A.size == 0:
+        return np.zeros((A.shape[0], 0))
+    U, S, Vt = svd(A, full_matrices=False)
+    tol = max(A.shape) * np.finfo(float).eps * (S[0] if S.size else 1.0)
+    r = int(np.sum(S > tol))
+    return U[:, :r]
+
+def projector_from_basis(W: np.ndarray) -> np.ndarray:
+    """If W has orthonormal columns, P = I - W W^T projects onto ker(W^T)."""
+    n = W.shape[0]
+    if W.shape[1] == 0:
+        return np.eye(n)
+    return np.eye(n) - W @ W.T
+
+def normalize(x: np.ndarray, tol: float = 1e-12) -> np.ndarray:
+    nrm = float(norm(x))
+    if nrm <= tol:
+        raise ValueError("Vector too small to normalize.")
+    return x / nrm
+
+# ---------- core: left-uncontrollable space ----------
+def left_uncontrollable_subspace(A: np.ndarray, B: np.ndarray,
+                                 tol: Optional[float] = None,
+                                 max_iter: int = 50) -> np.ndarray:
+    """
+    Largest A^T-invariant subspace contained in ker(B^T) (orthonormal basis W_all).
+    This equals the span of left (generalized) eigenvectors w with w^T B = 0.
+    """
+    n = A.shape[0]
+    Wk = _svd_nullspace(B.T, tol=tol)  # start in ker(B^T)
+    if Wk.shape[1] == 0:
+        return Wk
+    Wk = _orth(Wk)
+    for _ in range(max_iter):
+        Pk = projector_from_basis(Wk)          # onto ker(Wk^T)
+        Mk = (np.eye(n) - Pk) @ (A.T)          # enforce A^T w ∈ span(Wk)
+        N  = np.vstack([Mk, B.T])              # intersection with ker(B^T)
+        Wn = _svd_nullspace(N, tol=tol)
+        Wn = _orth(Wn)
+        # convergence via projector distance
+        if norm(projector_from_basis(Wn) - projector_from_basis(Wk), 2) <= (tol or 1e-10):
+            return Wn
+        Wk = Wn
+    return Wk
+
+# ---------- selecting a subset to keep dark ----------
+def choose_dark_subset(W_all: np.ndarray, k: int = 1, rng: Optional[np.random.Generator] = None) -> np.ndarray:
+    """Pick k columns from an orthonormal basis W_all to suppress (k ≥ 1)."""
+    k = int(max(1, min(k, W_all.shape[1])))
+    if W_all.shape[1] == 0:
+        return W_all
+    rng = np.random.default_rng() if rng is None else rng
+    idx = rng.choice(W_all.shape[1], size=k, replace=False)
+    return W_all[:, idx]
+
+# ---------- main builders ----------
+def make_dark_projector(A: np.ndarray, B: np.ndarray, k_off: int = 1,
+                        rng: Optional[np.random.Generator] = None,
+                        tol: Optional[float] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Returns (W_all, W_off, P_dark) where W_all spans all uncontrollable left modes,
+    W_off (⊆ W_all) has k_off columns chosen to stay dark, and P_dark projects onto ker(W_off^T).
+    """
+    W_all = left_uncontrollable_subspace(A, B, tol=tol)
+    if W_all.shape[1] == 0:
+        n = A.shape[0]
+        return W_all, np.zeros((n, 0)), np.eye(n)
+    W_off = choose_dark_subset(W_all, k=k_off, rng=rng)
+    # columns of W_all are orthonormal; subset preserves orthonormality
+    P_dark = projector_from_basis(W_off)
+    return W_all, W_off, P_dark
+
+def build_projected_x0(A: np.ndarray, B: np.ndarray, x0_seed: np.ndarray,
+                       k_off: int = 1, rng: Optional[np.random.Generator] = None,
+                       tol: Optional[float] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Project x0_seed onto ker(W_off^T) to make at least k_off uncontrollable directions dark.
+    Returns (x0_proj, W_off, P_dark).
+    """
+    W_all, W_off, P_dark = make_dark_projector(A, B, k_off=k_off, rng=rng, tol=tol)
+    x = P_dark @ x0_seed
+    if norm(x) <= (tol or 1e-10):
+        # try a few random seeds
+        rng = np.random.default_rng() if rng is None else rng
+        for _ in range(32):
+            x_try = P_dark @ rng.standard_normal(A.shape[0])
+            if norm(x_try) > (tol or 1e-10):
+                x = x_try
+                break
+    if norm(x) <= (tol or 1e-10):
+        # if still tiny (e.g., k_off == n), fall back to any unit vector in ker(W_off^T)
+        # find an orth basis for ker(W_off^T) by orthonormal complement of W_off
+        n = A.shape[0]
+        if W_off.shape[1] >= n:
+            raise RuntimeError("ker(W_off^T) is trivial; cannot project.")
+        Qc = _orth(np.eye(n) - W_off @ W_off.T)
+        x = Qc[:, 0]
+    return normalize(x), W_off, P_dark
+
+
+
