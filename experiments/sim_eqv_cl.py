@@ -41,14 +41,13 @@ def run_experiment(cfg: ExperimentConfig) -> Dict[str, Any]:
     Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
     
     # Generate input
-    U = prbs(cfg.m, cfg.T, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
+    U = prbs(cfg.T, cfg.m, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
     
     # Simulate and identify
     x0 = rng.standard_normal(cfg.n)
     x0 /= np.linalg.norm(x0)
     
-    X = simulate_dt(cfg.T, x0, Ad, Bd, U, 
-                   noise_std=cfg.noise_std, rng=rng)
+    X = simulate_dt(x0, Ad, Bd, U, noise_std=cfg.noise_std, rng=rng)
     
     # Identify
     X0, X1, Utr = X[:, :-1], X[:, 1:], U.T

@@ -63,11 +63,10 @@ def run_experiment_for_d(cfg: ExperimentConfig, d: int, score_thr: float | None 
     print(f"[debug] d={d}: CT controllability rank r={rCT} (expect {A.shape[0]-d}), dark_dim={W_all.shape[1]}")
 
     # Shared input across all trials at this d (PE-ish PRBS)
-    U = prbs(cfg.m, cfg.T, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
+    U = prbs(cfg.T, cfg.m, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
 
     def trial(x0: np.ndarray) -> float:
-        X = simulate_dt(cfg.T, x0, Ad, Bd, U,
-                        noise_std=cfg.noise_std, rng=rng)
+        X = simulate_dt(x0, Ad, Bd, U, noise_std=cfg.noise_std, rng=rng)
         X0, X1 = X[:, :-1], X[:, 1:]
         Ahat, Bhat = dmdc_tls(X0, X1, U)
         nA = np.linalg.norm(Ad, 'fro') + EPS

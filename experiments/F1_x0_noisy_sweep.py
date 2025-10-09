@@ -59,12 +59,14 @@ def _simulate_dt_with_noise(Ad: np.ndarray, Bd: np.ndarray, x0: np.ndarray,
                             sigma_w: float = 0.0) -> np.ndarray:
     """x_{t+1} = Ad x_t + Bd u_t + w_t, w_t ~ N(0, sigma_w^2 I). Returns X (n, T+1)."""
     n, m = Ad.shape[0], Bd.shape[1]
-    T = U_clean.shape[1]
+    if U_clean.ndim != 2 or U_clean.shape[1] != m:
+        raise ValueError(f"U_clean must have shape (T, m); got {U_clean.shape}")
+    T = U_clean.shape[0]
     X = np.zeros((n, T + 1), dtype=float)
     X[:, 0] = x0
     for t in range(T):
         w = sigma_w * rng.standard_normal(n) if sigma_w > 0 else 0.0
-        X[:, t+1] = Ad @ X[:, t] + Bd @ U_clean[:, t] + w
+        X[:, t+1] = Ad @ X[:, t] + Bd @ U_clean[t, :] + w
     return X
 
 def _trial_once(Ad: np.ndarray, Bd: np.ndarray, x0: np.ndarray, U_clean: np.ndarray,
@@ -112,7 +114,7 @@ def run_experiment_for_d_noisy(cfg: ExperimentConfig, d: int, *,
     Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
 
     # Persistently exciting input (clean)
-    U_clean = prbs(cfg.m, cfg.T, rng=rng)
+    U_clean = prbs(cfg.T, cfg.m, rng=rng)
 
     def draw_x0_unit():
         x0 = rng.standard_normal(cfg.n); x0 /= (np.linalg.norm(x0) + 1e-18)

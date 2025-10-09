@@ -49,7 +49,7 @@ class ExpConfig:
     PE_r: Optional[int] = None                   # moment-PE (nonlocal) constraint
 
     # --- Identification algorithms ---
-    algs: Sequence[str] = ("dmdc", "moesp")
+    moesp_s: Optional[int] = None
 
     light: bool = True
 
@@ -78,6 +78,9 @@ class ExpConfig:
         # Validate PE order target if used
         if self.PE_r is not None and self.PE_r <= 0:
             raise ValueError("PE_r must be a positive integer if provided.")
+        
+        if self.moesp_s is not None and self.moesp_s <= 0:
+            raise ValueError("moesp_s must be positive when provided.")
 
 
 @dataclass

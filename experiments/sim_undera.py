@@ -51,11 +51,11 @@ def run_one_trial(n: int, m: int, cfg: UnderaConfig, rng: np.random.Generator) -
     Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
     
     # Generate input and simulate
-    U = prbs(m, cfg.T, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
+    U = prbs(cfg.T, m, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
     x0 = rng.standard_normal(n)
     x0 /= np.linalg.norm(x0)
     
-    X = simulate_dt(cfg.T, x0, Ad, Bd, U, noise_std=cfg.noise_std, rng=rng)
+    X = simulate_dt(x0, Ad, Bd, U, noise_std=cfg.noise_std, rng=rng)
     
     # Identify
     X0, X1 = X[:, :-1], X[:, 1:]

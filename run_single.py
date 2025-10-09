@@ -211,6 +211,47 @@ def _pbh_margin_min_sigma(A: np.ndarray,
     return float(margin)
 
 
+def build_visible_basis_dt(Ad, Bd, x0, tol=1e-10, max_pow=None):
+    """
+    Returns P (n×k) with orthonormal columns spanning
+    span{ [x0 Bd], Ad[x0 Bd], ..., Ad^{n-1}[x0 Bd] }.
+
+    Prefers column-pivoted QR from SciPy; falls back to SVD if SciPy unavailable.
+    """
+    import numpy as np
+    n = Ad.shape[0]
+    if max_pow is None:
+        max_pow = n - 1
+
+    K0 = np.column_stack([x0.reshape(-1, 1), Bd])  # n×(1+m)
+    blocks = [K0]
+    Ak = Ad.copy()
+    for _ in range(max_pow):
+        blocks.append(Ak @ K0)
+        Ak = Ak @ Ad
+    M = np.concatenate(blocks, axis=1)  # n×((n)*(1+m))
+
+    thr = tol * np.linalg.norm(M, 'fro')
+
+    # Try SciPy pivoted QR first
+    try:
+        result = qr(M, mode='economic', pivoting=True)
+        if len(result) == 3:
+            Q, R, piv = result
+        elif len(result) == 2:
+            Q, R = result
+        else:
+            Q = result[0]
+            R = np.zeros((Q.shape[1], Q.shape[1]), dtype=Q.dtype)  # fallback: dummy R
+        diag = np.abs(np.diag(R))
+        r = int((diag > thr).sum())
+        Q = np.asarray(Q)  # ensure Q is a NumPy array for slicing
+        return Q[:, :r]
+    except Exception:
+        # Fallback: SVD-based column space
+        U, s, Vt = np.linalg.svd(M, full_matrices=False)
+        r = int((s > thr).sum())
+        return U[:, :r]
 
 # --------------------------
 # public entry point
@@ -307,7 +348,7 @@ def run_single(cfg: ExpConfig,
     # --- regression blocks
     Xtrain = X[:, :-1] # (n, T)
     Xp = X[:,  1:] # (n, T)
-    Utrain = u.T # (m, T)
+    Utrain = u # (m, T)
 
 
     # --- convenience PE estimate (input-based)
@@ -350,14 +391,22 @@ def run_single(cfg: ExpConfig,
         except Exception as e:
             results_est["dmdc"] = {"error": str(e)}
 
+    moesp_window: int | None = None
+
     if "moesp" in algs:
         try:
             # Simple PI-MOESP assuming full-state output y = x
             y = X.T  # (T+1, n)
-            s_use = max(cfg.n, min(10, cfg.T // 4))  # keep s >= n (heuristic)
+            if cfg.moesp_s is not None:
+                s_use = int(cfg.moesp_s)
+                if s_use <= 0:
+                    raise ValueError("cfg.moesp_s must be positive when provided.")
+            else:
+                s_use = max(cfg.n, min(10, cfg.T // 4))  # keep s >= n (heuristic)
             Ahat, Bhat = moesp_core(Xtrain, Xp, Utrain, s=s_use, n=cfg.n)
             errA, errB = projected_errors(Ahat, Bhat, Ad, Bd, Vbasis=Vbasis)
-            results_est["moesp"] = {"A_err_PV": errA, "B_err_PV": errB}
+            moesp_window = int(s_use)
+            results_est["moesp"] = {"A_err_PV": errA, "B_err_PV": errB, "window": moesp_window}
         except Exception as e:
             results_est["moesp"] = {"error": str(e)}
         
@@ -384,4 +433,5 @@ def run_single(cfg: ExpConfig,
         "K_pointwise_q": None if Wmat is None else int(Wmat.shape[1]),
         "K_PE_r": r,
         "light": bool(light),
+        "moesp_s_used": moesp_window,
     }

@@ -76,6 +76,8 @@ def _add_common_single_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--algs", type=str, default="dmdc,moesp",
                    help="Comma-separated list, e.g. 'dmdc,moesp,dmdc_tls,dmdc_iv'.")
+    p.add_argument("--moesp-s", dest="moesp_s", type=int, default=None,
+                   help="Override the MOESP window size s. Default uses heuristic max(n, min(10, T//4)).")
     
     # JAX toggles
     p.add_argument("--use-jax", action="store_true",
@@ -279,6 +281,7 @@ def main():
             U_restr=U_restr,
             PE_r=a.PE_r,
             algs=tuple(s.strip() for s in a.algs.split(",") if s.strip()),
+            moesp_s=a.moesp_s,
             light=True,
         )
         sopts = SolverOpts(

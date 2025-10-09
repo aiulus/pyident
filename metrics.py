@@ -2,7 +2,7 @@ from __future__ import annotations
 import numpy as np
 import numpy.linalg as npl
 from typing import Tuple, Optional
-from scipy.linalg import expm, eigvals, solve_continuous_lyapunov, solve_discrete_lyapunov, null_space
+from scipy.linalg import expm, eigvals, solve_continuous_lyapunov, solve_discrete_lyapunov, null_space, qr
 from .simulation import simulate_dt
 
 # ---------------------------------------------------------------------
@@ -18,6 +18,50 @@ from .simulation import simulate_dt
 # - PBH margins are evaluated exactly at eigenvalues; near-defective cases
 #   may need small complex-radius sweeps (optional hook provided).
 # ---------------------------------------------------------------------
+
+def build_visible_basis_dt(Ad, Bd, x0, tol=1e-10, max_pow=None):
+    """
+    Returns P (n×k) with orthonormal columns spanning
+    span{ [x0 Bd], Ad[x0 Bd], ..., Ad^{n-1}[x0 Bd] }.
+
+    Prefers column-pivoted QR from SciPy; falls back to SVD if SciPy unavailable.
+    """
+    import numpy as np
+    n = Ad.shape[0]
+    if max_pow is None:
+        max_pow = n - 1
+
+    K0 = np.column_stack([x0.reshape(-1, 1), Bd])  # n×(1+m)
+    blocks = [K0]
+    Ak = Ad.copy()
+    for _ in range(max_pow):
+        blocks.append(Ak @ K0)
+        Ak = Ak @ Ad
+    M = np.concatenate(blocks, axis=1)  # n×((n)*(1+m))
+
+    thr = tol * np.linalg.norm(M, 'fro')
+
+    # Try SciPy pivoted QR first
+    try:
+        result = qr(M, mode='economic', pivoting=True)
+        if len(result) == 3:
+            Q, R, piv = result
+        elif len(result) == 2:
+            Q, R = result
+        else:
+            Q = result[0]
+            R = np.zeros((Q.shape[1], Q.shape[1]), dtype=Q.dtype)  # fallback: dummy R
+        diag = np.abs(np.diag(R))
+        r = int((diag > thr).sum())
+        Q = np.asarray(Q)  # ensure Q is a NumPy array for slicing
+        return Q[:, :r]
+    except Exception:
+        # Fallback: SVD-based column space
+        U, s, Vt = np.linalg.svd(M, full_matrices=False)
+        r = int((s > thr).sum())
+        return U[:, :r]
+
+
 
 
 def same_equiv_class(A1: np.ndarray, B1: np.ndarray,
@@ -485,7 +529,17 @@ def same_equiv_class_dt_rel(Ad, Bd, Ahat, Bhat, x0,
 
 # --- NEW: data-equivalence residual ----------------------------------
 def data_equivalence_residual(X0, X1, U, Ahat, Bhat, rtol: float = 1e-10):
-    R = X1 - Ahat @ X0 - Bhat @ U
+    if U.ndim != 2:
+        raise ValueError(f"U must be 2-D, got shape {U.shape}")
+    T = X0.shape[1]
+    if U.shape[1] == T:
+        U_cm = U
+    elif U.shape[0] == T:
+        U_cm = U.T
+    else:
+        raise ValueError(f"U shape {U.shape} incompatible with time length {T}")
+
+    R = X1 - Ahat @ X0 - Bhat @ U_cm
     rel = float(npl.norm(R, "fro") / (npl.norm(X1, "fro") + 1e-18))
     return (rel <= rtol), {"resid_rel": rel}
 
@@ -514,10 +568,11 @@ def mu_left_eigs(A, x0, B):
     return wvals, mu
 
 def x0_score(x0, cfg, rng, Ad, Bd, U):
-    X_nf = simulate_dt(cfg.T, x0, Ad, Bd, U, noise_std=0.0, rng=rng)
+    """Evaluate PE/conditioning scores for a candidate initial state."""
+    X_nf = simulate_dt(x0, Ad, Bd, U, noise_std=0.0, rng=rng)
     X0_nf, X1_nf = X_nf[:, :-1], X_nf[:, 1:]
     P, _ = visible_subspace(Ad, Bd, x0)          # basis of V(x0)
-    ZV = np.vstack([P.T @ X0_nf, U])                     # (k+m, T)
+    ZV = np.vstack([P.T @ X0_nf, U.T])                     # (k+m, T)
     svals = np.linalg.svd(ZV, compute_uv=False)
     kappa = (svals[0] / (svals[-1] + 1e-18)) if svals.size else np.inf
     cond_factor = (svals[-1] / (svals[0] + 1e-18))       # == 1/kappa

@@ -54,16 +54,15 @@ def run_one_trial(density: float, cfg: SparseConfig, rng: np.random.Generator) -
     # Generate sparse system
     A = sparse_continuous(cfg.n, int(density), rng)
     B = rng.standard_normal((cfg.n, cfg.m))
-    Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)  # Note: order is Ad, Bd not Bd, Ad
-    Bd, Ad = cont2discrete_zoh(A, B, cfg.dt)
+    Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
     
     # Generate input and simulate
-    U = prbs(cfg.m, cfg.T, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
+    U = prbs(cfg.T, cfg.m, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
     x0 = rng.standard_normal(cfg.n)
     x0 /= np.linalg.norm(x0)
-    
-    X = simulate_dt(cfg.T, x0, Ad, Bd, U, noise_std=cfg.noise_std, rng=rng)
-    
+
+    X = simulate_dt(x0, Ad, Bd, U, noise_std=cfg.noise_std, rng=rng)
+
     # Identify
     X0, X1 = X[:, :-1], X[:, 1:]
     Ahat, Bhat = dmdc_tls(X0, X1, U)

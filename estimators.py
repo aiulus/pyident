@@ -8,41 +8,60 @@ from torchdiffeq import odeint
 
 
 class NODE(torch.nn.Module):
-    def __init__(self, n, m, bias=False):
+    def __init__(self, n, m, bias: bool = False):
         super().__init__()
         self.fc = torch.nn.Linear(n + m, n, bias=bias)
 
     def forward(self, t, x_and_u):
         return self.fc(x_and_u)
+    
+def _ensure_channel_major(U: np.ndarray, expected_T: int) -> np.ndarray:
+    """Return ``U`` with shape ``(m, T)``; accept time-major ``(T, m)`` inputs."""
 
-def node_fit(Xtrain, Xp, Utrain, dt, epochs=100):
+    if U.ndim != 2:
+        raise ValueError(f"U must be 2-D, got shape {U.shape}.")
+
+    if U.shape[1] == expected_T:
+        return U
+    if U.shape[0] == expected_T:
+        return U.T
+
+    raise ValueError(
+        f"Unable to align U of shape {U.shape} with expected T={expected_T}."
+    )
+
+
+def node_fit(Xtrain: np.ndarray,
+             Xp: np.ndarray,
+             Utrain: np.ndarray,
+             dt: float,
+             epochs: int = 100):
     n, T = Xtrain.shape
-    m = Utrain.shape[0]
-    device = 'cpu'
-    model = NODE(n, m, bias=False).to(device)
+    #m = Utrain.shape[0]
+    #device = 'cpu'
+    U_cm = _ensure_channel_major(Utrain, T)
+    m = U_cm.shape[0]
+    device = "cpu"
+
+    model = NODE(n, m).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
+
     Xtrain_torch = torch.tensor(Xtrain.T, dtype=torch.float32, device=device)
-    Utrain_torch = torch.tensor(Utrain.T, dtype=torch.float32, device=device)
+    Utrain_torch = torch.tensor(U_cm.T, dtype=torch.float32, device=device)
     Xp_torch = torch.tensor(Xp.T, dtype=torch.float32, device=device)
 
-    for epoch in range(epochs):
+    for _ in range(epochs):
         optimizer.zero_grad()
         xu = torch.cat([Xtrain_torch, Utrain_torch], dim=1)
         pred = model.fc(xu)
         loss = torch.nn.functional.mse_loss(pred, Xp_torch)
         loss.backward()
         optimizer.step()
-
-    # Extract linear weights (bias may be None if bias=False)
+        
     model.eval()
     with torch.no_grad():
         W = model.fc.weight.detach().cpu().numpy()
-        if model.fc.bias is None:
-            b = np.zeros(n, dtype=W.dtype)
-        else:
-            b = model.fc.bias.detach().cpu().numpy()
 
-    # Split W into A, B
     A_node = W[:, :n]
     B_node = W[:, n:]
     return A_node, B_node
@@ -50,6 +69,7 @@ def node_fit(Xtrain, Xp, Utrain, dt, epochs=100):
 
 def sindy_fit(X, Xp, U, dt):
     n, T = X.shape
+    U_cm = _ensure_channel_major(U, T)
     X_all = np.hstack([X[:, :1], Xp])
     Xdot = np.empty_like(X)
     if T >= 2:
@@ -59,7 +79,7 @@ def sindy_fit(X, Xp, U, dt):
     else:
         Xdot[:, 0] = (X_all[:, 1] - X_all[:, -2]) / dt 
 
-    Z = np.vstack([X, U])
+    Z = np.vstack([X, U_cm])
     Theta = Xdot @ np.linalg.pinv(Z, rcond=1e-12)
     return Theta[:, :n], Theta[:, n:]
 
@@ -68,7 +88,8 @@ def sindy_fit_dt(X, U, dt, degree=1):
     from pysindy.feature_library import PolynomialLibrary
     lib = PolynomialLibrary(degree=degree, include_bias=False)
     model = SINDy(discrete_time=True, feature_library=lib)
-    model.fit(X.T, u=U.T, t=dt)
+    U_cm = _ensure_channel_major(U, X.shape[1])
+    model.fit(X.T, u=U_cm.T, t=dt)
     coef = model.coefficients()  # (n, n+m)
     n = X.shape[0]
     return coef[:, :n], coef[:, n:]
@@ -88,8 +109,9 @@ def dmdc_pinv(
     Solves Xp ≈ [A B] [X; U] with Θ = Xp Z^+ , Z=[X;U].
     Exact in noiseless data; returns a solution even if Z is rank-deficient.
     """
-    n = X.shape[0]
-    Z = np.vstack([X, U])              # (n+m, T)
+    n, T = X.shape
+    U_cm = _ensure_channel_major(U, T)
+    Z = np.vstack([X, U_cm])  
     Z_pinv = np.linalg.pinv(Z, rcond=rcond)
     AB = Xp @ Z_pinv                   # (n, n+m)
     Ahat = AB[:, :n]
@@ -112,8 +134,9 @@ def dmdc_ridge(
       Θ = (Xp Z^T) (Z Z^T + λ I)^{-1},  Z=[X;U].
     More stable when Z is ill-conditioned or short.
     """
-    n = X.shape[0]
-    Z = np.vstack([X, U])                   # (n+m, T)
+    n, T = X.shape
+    U_cm = _ensure_channel_major(U, T)
+    Z = np.vstack([X, U_cm])  
     ZZt = Z @ Z.T
     G = ZZt + lam * np.eye(ZZt.shape[0], dtype=ZZt.dtype)
     AB = (Xp @ Z.T) @ np.linalg.solve(G, np.eye(G.shape[0], dtype=G.dtype))
@@ -134,8 +157,9 @@ def dmdc_tsvd(
       Z = U Σ V^T ; use top-r or tol-based truncation to form Z^+_r.
     Useful to restrict to the excited/identifiable subspace explicitly.
     """
-    n = X.shape[0]
-    Z = np.vstack([X, U])                    # (n+m, T)
+    n, T = X.shape
+    U_cm = _ensure_channel_major(U, T)
+    Z = np.vstack([X, U_cm]) 
     Uz, Sz, Vtz = np.linalg.svd(Z, full_matrices=False)
     if rank is None:
         if svd_tol is not None:
@@ -191,8 +215,10 @@ def moesp_fit(
     Wrapper to accept (X,Xp,U) blocks (as used in run_single/tests) and call
     moesp_fullstate with time-major sequences.
     """
-    assert X.shape[1] == U.shape[1] == Xp.shape[1], "time lengths must match"
-    u_ts = U.T                       # (T, m)
+    T = X.shape[1]
+    U_cm = _ensure_channel_major(U, T)
+    assert Xp.shape[1] == T, "time lengths must match"
+    u_ts = U_cm.T 
     x_ts = X.T                       # (T, n)
     n_use = int(n if n is not None else X.shape[0])
     return moesp_fullstate(u_ts, x_ts, n=n_use, i=s, f=None, rcond=rcond)
@@ -207,9 +233,10 @@ def dmdc_tls(X: np.ndarray, Xp: np.ndarray, U: np.ndarray,
     Row-wise scaled TLS for Xp ≈ Θ [X;U].
     Column-scale the augmented matrix to improve conditioning; fallback to OLS if needed.
     """
-    n = X.shape[0]
-    Z = np.vstack([X, U]).T                     # (T, n+m)
-    Y = Xp.T                                    # (T, n)
+    n, T = X.shape
+    U_cm = _ensure_channel_major(U, T)
+    Z = np.vstack([X, U_cm]).T 
+    Y = Xp.T                                   
 
     Theta = np.zeros((n, Z.shape[1]), dtype=X.dtype)
     for j in range(n):
@@ -252,15 +279,16 @@ def dmdc_iv(X: np.ndarray, Xp: np.ndarray, U: np.ndarray,
       2) OLS of Y on Z_hat
     """
     n, T = X.shape
-    assert Xp.shape[1] == T and U.shape[1] == T
+    U_cm = _ensure_channel_major(U, T)
+    assert Xp.shape[1] == T and U_cm.shape[1] == T
     if L < 1 or L >= T:
         raise ValueError("L must be in [1, T-1].")
 
     Y = Xp[:, L:]                               # (n, T-L)
-    Z = np.vstack([X[:, L-1:T-1], U[:, L-1:T-1]])  # ((n+m), T-L)
+    Z = np.vstack([X[:, L-1:T-1], U_cm[:, L-1:T-1]])  # ((n+m), T-L)
 
     if instruments is None:
-        Phi = _lag_stack(U, L)                  # (mL, T-L)
+        Phi = _lag_stack(U_cm, L)                  # (mL, T-L)
     else:
         assert instruments.shape[1] == T, "instruments must have same time length as X"
         Phi = instruments[:, L:]                # (p, T-L)

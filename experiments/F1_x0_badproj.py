@@ -43,10 +43,10 @@ def run_experiment_for_d(cfg: ExperimentConfig, d: int, q_high: float, k_off: in
 
 
     # Shared PRBS input for this d
-    U = prbs(cfg.m, cfg.T, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
+    U = prbs(cfg.T, cfg.m, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
 
     def trial(x0: np.ndarray) -> float:
-        X = simulate_dt(cfg.T, x0, Ad, Bd, U, noise_std=cfg.noise_std, rng=rng)
+        X = simulate_dt(x0, Ad, Bd, U, noise_std=cfg.noise_std, rng=rng)
         X0, X1 = X[:, :-1], X[:, 1:]
         Ahat, Bhat = dmdc_tls(X0, X1, U)
         errA = np.linalg.norm(Ahat - Ad, 'fro')

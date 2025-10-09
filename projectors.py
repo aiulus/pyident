@@ -2,8 +2,52 @@ from __future__ import annotations
 from typing import Tuple, Optional
 import numpy as np
 from numpy.linalg import svd, norm
+from scipy.linalg import qr
 
 EPS = 1e-12
+
+
+def build_visible_basis_dt(Ad, Bd, x0, tol=1e-10, max_pow=None):
+    """
+    Returns P (n×k) with orthonormal columns spanning
+    span{ [x0 Bd], Ad[x0 Bd], ..., Ad^{n-1}[x0 Bd] }.
+
+    Prefers column-pivoted QR from SciPy; falls back to SVD if SciPy unavailable.
+    """
+    import numpy as np
+    n = Ad.shape[0]
+    if max_pow is None:
+        max_pow = n - 1
+
+    K0 = np.column_stack([x0.reshape(-1, 1), Bd])  # n×(1+m)
+    blocks = [K0]
+    Ak = Ad.copy()
+    for _ in range(max_pow):
+        blocks.append(Ak @ K0)
+        Ak = Ak @ Ad
+    M = np.concatenate(blocks, axis=1)  # n×((n)*(1+m))
+
+    thr = tol * np.linalg.norm(M, 'fro')
+
+    # Try SciPy pivoted QR first
+    try:
+        result = qr(M, mode='economic', pivoting=True)
+        if len(result) == 3:
+            Q, R, piv = result
+        elif len(result) == 2:
+            Q, R = result
+        else:
+            Q = result[0]
+            R = np.zeros((Q.shape[1], Q.shape[1]), dtype=Q.dtype)  # fallback: dummy R
+        diag = np.abs(np.diag(R))
+        r = int((diag > thr).sum())
+        Q = np.asarray(Q)  # ensure Q is a NumPy array for slicing
+        return Q[:, :r]
+    except Exception:
+        # Fallback: SVD-based column space
+        U, s, Vt = np.linalg.svd(M, full_matrices=False)
+        r = int((s > thr).sum())
+        return U[:, :r]
 
 # ---------- basic LA helpers ----------
 def _svd_nullspace(M: np.ndarray, tol: Optional[float] = None) -> np.ndarray:
