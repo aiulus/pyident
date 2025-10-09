@@ -44,13 +44,16 @@ def _pbh_krylov_badness(Ad, Bd, x0, eps=1e-12):
 # --------------------------
 # Core experiment per d
 # --------------------------
-def run_experiment_for_d(cfg: ExperimentConfig, ensemble_type: str, d: int, score_thr: float | None = None) -> Dict[str, Any]:
+def run_experiment_for_d(cfg: ExperimentConfig, ensemble_type: str, seed: int, d: int, score_thr: float | None = None) -> Dict[str, Any]:
     """
     Run the x0-filtering experiment for a fixed deficiency d (so rank ctrb = n-d).
-    Returns dict with MSE arrays etc.
+    Returns dict with REE arrays etc.
     """
     # Per-d RNG so runs are reproducible but distinct
-    rng = np.random.default_rng(int(cfg.seed) + int(d) * 997)
+    if seed is None:
+        rng = np.random.default_rng(int(seed) + int(d) * 997)
+    else:
+        rng = np.random.default_rng(int(cfg.seed) + int(d) * 997)
 
     # Fixed continuous-time pair with controllability rank r = n - d
     A, B, meta = draw_with_ctrb_rank(
@@ -77,46 +80,35 @@ def run_experiment_for_d(cfg: ExperimentConfig, ensemble_type: str, d: int, scor
     # RANDOM x0
     mses_rand: List[float] = []
     logpbh_rand: List[float] = []
-    logkry_rand: List[float] = []
     for _ in range(cfg.n_trials):
         x0 = rng.standard_normal(cfg.n)
         x0 /= np.linalg.norm(x0) + EPS
         lp = _log_pbh(A, B, x0)     
-        lk = _log_krylov(A, B, x0)  
         logpbh_rand.append(lp)
-        logkry_rand.append(lk)
         mses_rand.append(trial(x0))
 
     # thresholds learned from the random pool (upper-tail gate)
     tau_logpbh_quant = float(np.quantile(logpbh_rand, cfg.q_filter))
-    tau_logkry_quant = float(np.quantile(logkry_rand, cfg.q_filter))
     # if a hard cutoff is provided, use it (in log-space) for BOTH metrics
     if score_thr is not None:
         tau_logpbh = float(score_thr)
-        tau_logkry = float(score_thr)
     else:
         tau_logpbh = tau_logpbh_quant
-        tau_logkry = tau_logkry_quant
     # Linear-scale cutoffs for readability:
     pbh_cutoff    = float(np.exp(tau_logpbh))
-    krylov_cutoff = float(np.exp(tau_logkry))
-
 
     # FILTERED x0 using theory-only AND-gate: logPBH >= τ_logPBH AND logσmin(K) >= τ_logK
     mses_filt: List[float] = []
     logpbh_filt: List[float] = []
-    logkry_filt: List[float] = []
     accepted, tries = 0, 0
     max_tries = 1000 * cfg.n_trials
     while accepted < cfg.n_trials and tries < max_tries:
         x0 = rng.standard_normal(cfg.n)
         x0 /= np.linalg.norm(x0) + EPS
-        lp = _log_pbh(A, B, x0)   
-        lk = _log_krylov(A, B, x0)  
+        lp = _log_pbh(A, B, x0)    
         tries += 1
-        if (lp >= tau_logpbh) and (lk >= tau_logkry):
+        if lp >= tau_logpbh:
             logpbh_filt.append(lp)
-            logkry_filt.append(lk)
             mses_filt.append(trial(x0))
             accepted += 1
 
@@ -131,19 +123,13 @@ def run_experiment_for_d(cfg: ExperimentConfig, ensemble_type: str, d: int, scor
 
         # theory metrics (random + filtered) and thresholds
         "logpbh_random": np.asarray(logpbh_rand, float),
-        "logkry_random": np.asarray(logkry_rand, float),
         "logpbh_filtered": np.asarray(logpbh_filt, float),
-        "logkry_filtered": np.asarray(logkry_filt, float),
 
         "tau_logpbh": float(tau_logpbh),
-        "tau_logkry": float(tau_logkry),
-
 
         "tau_logpbh_quantile": float(tau_logpbh_quant),
-        "tau_logkry_quantile": float(tau_logkry_quant),
 
         "pbh_cutoff": float(pbh_cutoff),                 # PBH ≥ val
-        "krylov_cutoff": float(krylov_cutoff),           # σ_min(K_n) ≥ val
 
         "meta": {
             "tries": int(tries),
@@ -157,11 +143,11 @@ def run_experiment_for_d(cfg: ExperimentConfig, ensemble_type: str, d: int, scor
 # Plot helpers (grid versions)
 # --------------------------
 def _global_limits(results: List[Dict[str, Any]]) -> Dict[str, Tuple[float, float]]:
-    """Compute global axis limits across all d for MSE and for shift/ECDF."""
+    """Compute global axis limits across all d for REE and for shift/ECDF."""
     all_mse = np.concatenate(
         [np.concatenate([out["mse_random"], out["mse_filtered"]]) for out in results]
     )
-    # ECDF/box/violin use MSE
+    # ECDF/box/violin use REE
     xmin, xmax = float(np.min(all_mse)), float(np.max(all_mse))
     ymin, ymax = xmin, xmax  # not used; but keep structure if needed
 
@@ -268,7 +254,7 @@ def _bootstrap_mean_diff(a: np.ndarray, b: np.ndarray, B: int = 2000, rng=None) 
 
 def plot_effect_size_grid(results: List[Dict[str, Any]], out_png: Path):
     # Gardner–Altman style: left swarm (light), right mean diff + 95% CI
-    # Shared y for raw MSE (left), shared y for diff panel (right) — here we keep a single axis per row for simplicity.
+    # Shared y for raw REE (left), shared y for diff panel (right) — here we keep a single axis per row for simplicity.
     dmin, dmax = _global_limits(results)["diff"]
     nrows = len(results)
     fig, axes = plt.subplots(nrows=nrows, ncols=1, figsize=(6, 2.6*nrows), sharex=False)
@@ -322,23 +308,20 @@ def plot_crit_vs_err_grid(results: List[Dict[str, Any]], out_png: Path):
     # gather global ranges
     all_mse = np.concatenate([np.r_[r["mse_random"], r["mse_filtered"]] for r in results])
     all_logpbh = np.concatenate([np.r_[r["logpbh_random"], r["logpbh_filtered"]] for r in results])
-    all_logkry = np.concatenate([np.r_[r["logkry_random"], r["logkry_filtered"]] for r in results])
-
+    
     ypad = 0.05 * (all_mse.max() - all_mse.min() + 1e-12)
     xpad1 = 0.05 * (all_logpbh.max() - all_logpbh.min() + 1e-12)
-    xpad2 = 0.05 * (all_logkry.max() - all_logkry.min() + 1e-12)
-
     nrows = len(results)
     fig, axes = plt.subplots(nrows=nrows, ncols=2, figsize=(10, 2.6*nrows), sharey=True)
     if nrows == 1:
         axes = np.array([axes])
 
     for i, out in enumerate(sorted(results, key=lambda o: o["d"])):
-        # left: log PBH vs MSE
+        # left: log PBH vs REE
         ax = axes[i, 0]
         ax.scatter(out["logpbh_random"], out["mse_random"], s=14, alpha=0.6, label="random")
         ax.scatter(out["logpbh_filtered"], out["mse_filtered"], s=14, alpha=0.6, label="filtered")
-        ax.set_title(f"log PBH vs MSE — $d={out['d']}$")
+        ax.set_title(f"log PBH vs REE — $d={out['d']}$")
         ax.set_xlabel("log PBH")
 
         ax.set_ylabel("Relative error")
@@ -346,18 +329,15 @@ def plot_crit_vs_err_grid(results: List[Dict[str, Any]], out_png: Path):
         if i == 0:
             ax.legend(frameon=False, fontsize=9)
 
-        # right: log σ_min(K) vs MSE
+        # right: log σ_min(K) vs REE
         ax = axes[i, 1]
-        ax.scatter(out["logkry_random"], out["mse_random"], s=14, alpha=0.6, label="random")
-        ax.scatter(out["logkry_filtered"], out["mse_filtered"], s=14, alpha=0.6, label="filtered")
-        ax.set_title(f"log $\\sigma_{{\\min}}(K)$ vs MSE — $d={out['d']}$")
+        ax.set_title(f"log $\\sigma_{{\\min}}(K)$ vs REE — $d={out['d']}$")
         ax.set_xlabel("log $\\sigma_{\\min}(K)$")
         ax.grid(True, linestyle="--", alpha=0.6)
 
     for j in range(2):
         axes[0, j].set_ylim(all_mse.min()-ypad, all_mse.max()+ypad)
     axes[-1, 0].set_xlim(all_logpbh.min()-xpad1, all_logpbh.max()+xpad1)
-    axes[-1, 1].set_xlim(all_logkry.min()-xpad2, all_logkry.max()+xpad2)
 
     fig.tight_layout()
     fig.savefig(out_png, dpi=150)
@@ -384,30 +364,22 @@ def save_correlations(results: List[Dict[str, Any]], out_csv: Path) -> None:
         for grp in ("random", "filtered"):
             err = out[f"mse_{grp}"]
             lp  = out[f"logpbh_{grp}"]
-            lk  = out[f"logkry_{grp}"]
             rP_lp, pP_lp, rS_lp, pS_lp = _corr(lp, err)
-            rP_lk, pP_lk, rS_lk, pS_lk = _corr(lk, err)
             rows.append({
                 "d": d, "group": grp,
                 "n": int(err.size),
                 "pearson_logPBH": rP_lp, "pearson_logPBH_p": pP_lp,
                 "spearman_logPBH": rS_lp, "spearman_logPBH_p": pS_lp,
-                "pearson_logSigmaK": rP_lk, "pearson_logSigmaK_p": pP_lk,
-                "spearman_logSigmaK": rS_lk, "spearman_logSigmaK_p": pS_lk,
             })
         # combined group per d
         err = np.r_[out["mse_random"], out["mse_filtered"]]
         lp  = np.r_[out["logpbh_random"], out["logpbh_filtered"]]
-        lk  = np.r_[out["logkry_random"], out["logkry_filtered"]]
         rP_lp, pP_lp, rS_lp, pS_lp = _corr(lp, err)
-        rP_lk, pP_lk, rS_lk, pS_lk = _corr(lk, err)
         rows.append({
             "d": d, "group": "all",
             "n": int(err.size),
             "pearson_logPBH": rP_lp, "pearson_logPBH_p": pP_lp,
             "spearman_logPBH": rS_lp, "spearman_logPBH_p": pS_lp,
-            "pearson_logSigmaK": rP_lk, "pearson_logSigmaK_p": pP_lk,
-            "spearman_logSigmaK": rS_lk, "spearman_logSigmaK_p": pS_lk,
         })
     df = pd.DataFrame(rows)
     df.to_csv(out_csv, index=False)
@@ -431,6 +403,7 @@ def main():
     ap.add_argument("--thr-linear", action="store_true",
                     help="Interpret --score-thr in linear scale (PBH and σ_min(K_n,norm)).")
     ap.add_argument("--ensemble-type", type=str, default="ginibre", help="Ensemble type for the experiment.")
+    ap.add_argument("--seed", type=int, help="Random seed for the experiment")
     args = ap.parse_args()
 
     outdir = Path(args.outdir)
@@ -454,16 +427,14 @@ def main():
         score_thr = None
 
     for d in d_vals:
-        out = run_experiment_for_d(cfg, args.ensemble_type, d, score_thr=score_thr)
+        out = run_experiment_for_d(cfg, args.ensemble_type, args.seed, d, score_thr=score_thr)
         results.append(out)
         print(
             "d={d}: τ_logPBH={tLP:.3e} (⇒ PBH ≥ {LP:.3e}), "
-            "τ_logσmin(K_n)={tLK:.3e} (⇒ σ_min(K_n,norm) ≥ {LK:.3e}), "
-            "quantiles: (PBH {qLP:.3e}, Krylov {qLK:.3e}), tries={tr}".format(
+            "quantiles: (PBH {qLP:.3e}), tries={tr}".format(
                 d=out["d"],
                 tLP=out["tau_logpbh"], LP=out["pbh_cutoff"],
-                tLK=out["tau_logkry"], LK=out["krylov_cutoff"],
-                qLP=out["tau_logpbh_quantile"], qLK=out["tau_logkry_quantile"],
+                qLP=out["tau_logpbh_quantile"],
                 tr=out["meta"]["tries"],
             )
         )

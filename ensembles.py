@@ -48,7 +48,7 @@ def sparse_continuous(
     m: int,
     rng: np.random.Generator,
     which: Literal["A", "B", "both"] = "both",
-    p_density: float = 0.5,
+    p_density: float = 0.3,
     p_density_A: Optional[float] = None,
     p_density_B: Optional[float] = None,
     check_zero_rows: bool = False,
@@ -293,32 +293,30 @@ def draw_with_ctrb_rank(
     ])
     B_blk = np.vstack([B_c, np.zeros((d, m))])  # no actuation on U
 
-    # (4) embed with random orthonormal basis to avoid axis bias
+    # (4) embed with random orthonormal basis (optional)
+    Q = np.eye(n)
     if embed_random_basis:
-        Q, _ = np.linalg.qr(rng.standard_normal((n, n)))
-    else:
-        Q = np.eye(n)
+        Q, _ = np.linalg.qr(rng.standard_normal((n, n)))  # Haar orthonormal
 
     A = Q @ A_blk @ Q.T
     B = Q @ B_blk
-    
-    if embed_random_basis:
-        rk_final, _ = controllability_rank(A, B, order=r, rtol=1e-10)
-        if rk_final != r:
-            rk_final2, _ = controllability_rank(A, B, order=r, rtol=1e-6)
-            if rk_final2 != r:
-                raise RuntimeError(
-                    f"Embedded pair lost target rank: got {rk_final2}, want {r}. "
-                    f"(use rtol≈1e-8..1e-9 or order=r)"
-                )
-            rk_final = rk_final2
-    else:
-        # In canonical (non-embedded) coordinates, the block construction guarantees rank r.
-        rk_final = r
+
+    # (5) verify controllability rank exactly r (use full order=n and robust rtol)
+    rtols = (1e-10, 1e-8, 1e-6)
+    rk_final = None
+    for rtol in rtols:
+        rk_final, R_basis_num = controllability_rank(A, B, order=n, rtol=rtol)
+        if rk_final == r:
+            break
+    if rk_final != r:
+        raise RuntimeError(
+            f"Target controllability rank r={r} not achieved after embedding "
+            f"(got {rk_final}). Try a looser rtol or re-draw."
+        )
 
     meta = {
         "Q": Q, "Ar": A_c, "Au": A_u, "Br": B_c,
-        "R_basis": Q[:, :r].copy(),
+        "R_basis": R_basis_num,  # numeric reachable basis (orthonormal)
         "rank": rk_final,
     }
 

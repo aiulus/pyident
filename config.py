@@ -26,8 +26,8 @@ class SolverOpts:
 @dataclass
 class ExpConfig:
     """Base configuration for an identification experiment."""
-    n: int = 15
-    m: int = 15
+    n: int = 20
+    m: int = 10
     T: int = 200
     dt: float = 0.05
     seed: int = 42  
