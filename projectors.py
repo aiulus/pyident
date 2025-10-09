@@ -90,25 +90,27 @@ def left_uncontrollable_subspace(A: np.ndarray, B: np.ndarray,
                                  tol: Optional[float] = None,
                                  max_iter: int = 50) -> np.ndarray:
     """
-    Largest A^T-invariant subspace contained in ker(B^T) (orthonormal basis W_all).
-    This equals the span of left (generalized) eigenvectors w with w^T B = 0.
+    Largest A^T-invariant subspace contained in ker(B^T).
     """
     n = A.shape[0]
-    Wk = _svd_nullspace(B.T, tol=tol)  # start in ker(B^T)
+    Wk = _svd_nullspace(B.T, tol=tol)      # start in ker(B^T)
     if Wk.shape[1] == 0:
         return Wk
     Wk = _orth(Wk)
+
     for _ in range(max_iter):
-        Pk = projector_from_basis(Wk)          # onto ker(Wk^T)
-        Mk = (np.eye(n) - Pk) @ (A.T)          # enforce A^T w ∈ span(Wk)
-        N  = np.vstack([Mk, B.T])              # intersection with ker(B^T)
+        Pk = projector_from_basis(Wk)      # Pk = I - Wk Wk^T  (projects onto (span Wk)^\perp)
+        N  = np.vstack([Pk @ A.T, B.T])    # enforce: Pk A^T w = 0 and B^T w = 0
         Wn = _svd_nullspace(N, tol=tol)
         Wn = _orth(Wn)
-        # convergence via projector distance
-        if norm(projector_from_basis(Wn) - projector_from_basis(Wk), 2) <= (tol or 1e-10):
+
+        # convergence: projector distance and/or dim stability
+        if (Wn.shape[1] == Wk.shape[1] and
+            norm(projector_from_basis(Wn) - projector_from_basis(Wk), 2) <= (tol or 1e-10)):
             return Wn
         Wk = Wn
     return Wk
+
 
 # ---------- selecting a subset to keep dark ----------
 def choose_dark_subset(W_all: np.ndarray, k: int = 1, rng: Optional[np.random.Generator] = None) -> np.ndarray:

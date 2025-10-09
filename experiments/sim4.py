@@ -1,32 +1,3 @@
-r"""Equivalence-class membership experiment with robust diagnostics.
-
-This script implements the validation procedure discussed in the prompt.  It
-draws a random (A, B) pair with a prescribed controllability rank, generates
-trajectories under persistently exciting PRBS inputs, and evaluates a suite of
-identification algorithms (currently ridge-regularised OLS) on the resulting
-data.  Errors are analysed both on the visible subspace V(x0) and on its
-orthogonal complement so that we can distinguish "easy estimation" from the
-theoretical equivalence-class invariance.
-
-Key features compared to the baseline pseudocode:
-
-* the visible subspace is constructed from the discrete-time pair (A_d, B_d)
-  using a pivoted QR (via :func:`metrics.build_visible_basis_dt`);
-* PRBS signals are regenerated until the regressor matrix is well conditioned;
-* burn-in periods remove start-up transients before estimation;
-* regression uses a numerically stable ridge solver instead of an explicit
-  pseudo-inverse;
-* relative errors on V(x0) use safe denominators, and complementary errors on
-  V(x0)^{\perp} are reported explicitly;
-* Markov-parameter, simulation, and subspace-alignment diagnostics are
-  produced to characterise the estimates;
-* an adversarial "W-block" perturbation highlights that raw errors can remain
-  large even when the equivalence-class claim holds on V(x0).
-
-The main entry point is :func:`run_experiment`, which returns a dictionary with
-the sampled system, estimates, and the per-trial diagnostics table.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -232,7 +203,6 @@ def run_experiment(cfg: EqvMembershipConfig) -> Dict[str, Any]:
         r=cfg.target_rank,
         rng=rng,
         ensemble_type="ginibre",
-        base_u="ginibre",
         embed_random_basis=True,
     )
     Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)

@@ -26,10 +26,10 @@ class SolverOpts:
 @dataclass
 class ExpConfig:
     """Base configuration for an identification experiment."""
-    n: int = 20
-    m: int = 10
+    n: int = 15
+    m: int = 5
     T: int = 200
-    dt: float = 0.05
+    dt: float = 0.1
     seed: int = 42  
 
     ensemble: str = 'A_stbl_B_ctrb'

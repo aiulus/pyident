@@ -145,12 +145,12 @@ def run_one_trial(n: int,
                  rng: np.random.Generator) -> Dict[str, Any]:
     """Run single trial with given dimension and density."""
     # Generate sparse system
-    A = sparse_continuous(n, density, rng)
+    A = sparse_continuous(n, cfg.m, density, rng)
     B = rng.standard_normal((n, cfg.m))
     Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
     
     # Generate input and simulate
-    U = prbs(cfg.m, cfg.T, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
+    U = prbs(cfg.T, cfg.m, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
     x0 = rng.standard_normal(n)
     x0 /= np.linalg.norm(x0)
     
