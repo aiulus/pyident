@@ -214,7 +214,7 @@ def run_trials(n=6, m=2, T=200, dt=0.05, trials=64, noise_std=0.0, seed=123):
     # Keep the barely uncontrollable case as in your small script
     A, B, meta = draw_with_ctrb_rank(
         n, m, r=n - 1, rng=rng,
-        base_c="ginibre", base_u="ginibre", embed_random_basis=True
+        ensemble_type="ginibre", base_u="ginibre", embed_random_basis=True
     )
     Ad, Bd = cont2discrete_zoh(A, B, dt)
 
@@ -261,7 +261,7 @@ def run_trials_stratified(
 
     # (A,B) full-ctrb for baseline comparability
     from ..ensembles import draw_with_ctrb_rank
-    A, B, _ = draw_with_ctrb_rank(n, m, r=n, rng=rng, base_c="ginibre", base_u="ginibre", embed_random_basis=True)
+    A, B, _ = draw_with_ctrb_rank(n, m, r=n, rng=rng, ensemble_type="ginibre", base_u="ginibre", embed_random_basis=True)
     Ad, Bd = cont2discrete_zoh(A, B, dt)
 
     # Persistently exciting inputs (same U for all trials)
@@ -365,10 +365,10 @@ def run_controls(
     rng = np.random.default_rng(seed)
 
     # Full-ctrb pair for A/B
-    A_f, B_f, _ = draw_with_ctrb_rank(n, m, r=n, rng=rng, base_c="ginibre", base_u="ginibre", embed_random_basis=True)
+    A_f, B_f, _ = draw_with_ctrb_rank(n, m, r=n, rng=rng, ensemble_type="ginibre", base_u="ginibre", embed_random_basis=True)
     Ad_f, Bd_f = cont2discrete_zoh(A_f, B_f, dt)
     # Deficient pair for C
-    A_d, B_d, _ = draw_with_ctrb_rank(n, m, r=max(0, n-1), rng=rng, base_c="ginibre", base_u="ginibre", embed_random_basis=True)
+    A_d, B_d, _ = draw_with_ctrb_rank(n, m, r=max(0, n-1), rng=rng, ensemble_type="ginibre", base_u="ginibre", embed_random_basis=True)
     Ad_d, Bd_d = cont2discrete_zoh(A_d, B_d, dt)
 
     u = prbs(T, m, rng, dwell=1); Utrain = u.T

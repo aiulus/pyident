@@ -27,13 +27,12 @@ def _log_krylov(A: np.ndarray, B: np.ndarray, x0: np.ndarray) -> float:
 # Core experiment per d
 # --------------------------
 
-def run_experiment_for_d(cfg: ExperimentConfig, d: int, q_high: float, k_off: int) -> Dict[str, Any]:
+def run_experiment_for_d(cfg: ExperimentConfig, ensemble_type: str, d: int, q_high: float, k_off: int) -> Dict[str, Any]:
     rng = np.random.default_rng(int(cfg.seed) + int(d) * 997)
 
     # CT base pair with rank r = n - d
     A, B, _ = draw_with_ctrb_rank(
-        n=cfg.n, m=cfg.m, r=max(0, cfg.n - d), rng=rng,
-        base_c="stable", base_u="stable"
+        n=cfg.n, m=cfg.m, r=max(0, cfg.n - d), rng=rng, ensemble_type=ensemble_type
     )
     Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
     # --- debug: controllability rank & dark dimension ---
@@ -162,6 +161,7 @@ def main():
     ap.add_argument("--dmax", type=int, default=3, help="Max deficiency d to include (starts at 0)")
     ap.add_argument("--q-high", type=float, default=0.80, help="Upper-quantile for seed selection")
     ap.add_argument("--k-off", type=int, default=1, help="# of uncontrollable directions to darken")
+    ap.add_argument("--ensemble-type", type=str, default="ginibre", help="Ensemble type for the experiment")
     args = ap.parse_args()
 
     outdir = Path(args.outdir); outdir.mkdir(exist_ok=True, parents=True)

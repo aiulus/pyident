@@ -199,7 +199,7 @@ def generate_system(
             m=m,
             r=rank_target,
             rng=rng,
-            base_c=deficiency_base,
+            ensemble_type=deficiency_base,
             base_u=deficiency_base,
             embed_random_basis=deficiency_embed_random,
         )

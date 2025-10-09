@@ -222,12 +222,10 @@ def draw_with_ctrb_rank(
     r: int,
     rng: np.random.Generator,
     *,
-    base_c: str = "ginibre",
-    base_u: Optional[str] = None,
-    max_tries: int = 20,
+    ensemble_type: str = "ginibre",
+    max_tries: int = 50,
     embed_random_basis: bool = True,
-    base_kwargs_c: Optional[Dict[str, Any]] = None,
-    base_kwargs_u: Optional[Dict[str, Any]] = None,
+    base_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
     """
     Construct (A,B) with *exact* controllability rank r in dimension n with m inputs.
@@ -244,7 +242,6 @@ def draw_with_ctrb_rank(
     r    : desired controllability rank (0 <= r <= n)
     rng  : NumPy Generator for reproducibility
     base_c : base generator for the controllable block (ginibre/stable/binary/sparse)
-    base_u : base generator for the unreachable block's A_u (defaults to base_c)
     max_tries : how many attempts to draw a controllable (A_c,B_c) of size rxm
     embed_random_basis : if True, embed blocks with a random orthonormal matrix Q
     base_kwargs_c / base_kwargs_u : forwarded to the respective base generators
@@ -263,9 +260,7 @@ def draw_with_ctrb_rank(
     if m < 1:
         raise ValueError("m must be ≥ 1")
 
-    base_u = base_u or base_c
-    base_kwargs_c = base_kwargs_c or {}
-    base_kwargs_u = base_kwargs_u or {}
+    base_kwargs = base_kwargs or {}
 
     # (1) build controllable block (A_c,B_c) of size r (or empty if r=0)
     if r == 0:
@@ -275,19 +270,19 @@ def draw_with_ctrb_rank(
         tries = 0
         while True:
             tries += 1
-            A_c, B_c = _draw_base_pair(base_c, r, m, rng, **base_kwargs_c)
+            A_c, B_c = _draw_base_pair(ensemble_type, r, m, rng, **base_kwargs)
             rk, _ = controllability_rank(A_c, B_c, order=r)
             if rk == r:
                 break
             if tries >= max_tries:
-                raise RuntimeError(f"Could not draw controllable block of size r={r} from base '{base_c}' after {max_tries} tries.")
+                raise RuntimeError(f"Could not draw controllable block of size r={r} from base '{ensemble_type}' after {max_tries} tries.")
 
     # (2) build unreachable block A_u of size n-r (or empty if r=n)
     d = n - r
     if d == 0:
         A_u = np.zeros((0, 0))
     else:
-        A_u, _Bu_dummy = _draw_base_pair(base_u, d, m, rng, **base_kwargs_u)
+        A_u, _Bu_dummy = _draw_base_pair(ensemble_type, d, m, rng, **base_kwargs)
 
     # (3) assemble block pair in canonical coordinates
     if r == 0 and d == 0:
@@ -306,24 +301,7 @@ def draw_with_ctrb_rank(
 
     A = Q @ A_blk @ Q.T
     B = Q @ B_blk
-
-    #rk_final, C = controllability_rank(A, B)
-    #if rk_final != r:
-    #    # Extremely unlikely if Q is orthonormal; guard anyway.
-    #    raise RuntimeError(f"Embedded pair lost target rank: got {rk_final}, want {r}.")
-    #rk_final, C = controllability_rank(A, B, order=r, rtol=1e-10)
-    #if rk_final != r:
-        # Try once more with a slightly stronger tolerance
-    #    rk_final2, C2 = controllability_rank(A, B, order=r, rtol=1e-6)
-    #    if rk_final2 != r:
-    #        raise RuntimeError(f"Embedded pair lost target rank: got {rk_final2}, want {r}. "
-    #                        f"(use rtol≈1e-8..1e-9 or order=r)")
-        
-    #meta = {
-    #    "Q": Q, "Ar": A_c, "Au": A_u, "Br": B_c,
-     #   "R_basis": Q[:, :r].copy(),
-     #   "rank": rk_final,
-    #}
+    
     if embed_random_basis:
         rk_final, _ = controllability_rank(A, B, order=r, rtol=1e-10)
         if rk_final != r:

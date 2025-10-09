@@ -109,7 +109,7 @@ def run_experiment_for_d_noisy(cfg: ExperimentConfig, d: int, *,
     r = max(0, cfg.n - d)
     A, B, meta = draw_with_ctrb_rank(
         n=cfg.n, m=cfg.m, r=r, rng=rng,
-        base_c="stable", base_u="stable"
+        ensemble_type="stable", base_u="stable"
     )
     Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
 

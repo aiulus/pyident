@@ -28,12 +28,12 @@ def _log_krylov(A: np.ndarray, B: np.ndarray, x0: np.ndarray) -> float:
 # Core experiment per d
 # --------------------------
 
-def run_experiment_for_d(cfg: ExperimentConfig, d: int, score_thr: float | None = None,
+def run_experiment_for_d(cfg: ExperimentConfig, ensemble_type: str, d: int, score_thr: float | None = None,
                          k_off: int = 1) -> Dict[str, Any]:
     rng = np.random.default_rng(int(cfg.seed) + int(d) * 997)
 
     A, B, meta = draw_with_ctrb_rank(
-        n=cfg.n, m=cfg.m, r=max(0, cfg.n - d), rng=rng, base_c="stable", base_u="stable"
+        n=cfg.n, m=cfg.m, r=max(0, cfg.n - d), rng=rng, ensemble_type=ensemble_type
     )
     Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
 
@@ -252,6 +252,7 @@ def main():
     ap.add_argument("--thr-linear", action="store_true",
                     help="Interpret --score-thr in linear scale (PBH and σ_min(K_n,norm)).")
     ap.add_argument("--k-off", type=int, default=1, help="# uncontrollable directions to darken in projection")
+    ap.add_argument("--ensemble-type", type=str, default="ginibre", help="Ensemble type for the experiment")
     args = ap.parse_args()
 
     outdir = Path(args.outdir); outdir.mkdir(exist_ok=True, parents=True)

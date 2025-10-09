@@ -36,7 +36,7 @@ def _log_krylov(A: np.ndarray, B: np.ndarray, x0: np.ndarray) -> float:
 # --------------------------
 # Core experiment per d
 # --------------------------
-def run_experiment_for_d(cfg: ExperimentConfig, d: int, score_thr: float | None = None) -> Dict[str, Any]:
+def run_experiment_for_d(cfg: ExperimentConfig, ensembletype: str, d: int, score_thr: float | None = None) -> Dict[str, Any]:
     """
     Run the x0-filtering experiment for deficiency d (controllability rank r = n-d).
     Returns dict with MSE arrays for RANDOM vs BAD (near-zero criteria) x0.
@@ -46,15 +46,15 @@ def run_experiment_for_d(cfg: ExperimentConfig, d: int, score_thr: float | None 
     # Fixed CT pair with controllability rank r = n - d
     A, B, _ = draw_with_ctrb_rank(
         n=cfg.n, m=cfg.m, r=max(0, cfg.n - d), rng=rng,
-        base_c="stable", base_u="stable"
+        ensemble_type=ensembletype, base_u=ensembletype
     )
     Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
 
     # Shared PRBS input for this d
-    U = prbs(cfg.m, cfg.T, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
+    U = prbs(cfg.T, cfg.m, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
 
     def trial(x0: np.ndarray) -> float:
-        X = simulate_dt(cfg.T, x0, Ad, Bd, U, noise_std=cfg.noise_std, rng=rng)
+        X = simulate_dt(x0, Ad, Bd, U, noise_std=cfg.noise_std, rng=rng)
         X0, X1 = X[:, :-1], X[:, 1:]
         Ahat, Bhat = dmdc_tls(X0, X1, U)
         errA = np.linalg.norm(Ahat - Ad, 'fro')
@@ -167,6 +167,7 @@ def main():
                          "By default interpreted in LOG-space; add --thr-linear to pass a linear cutoff.")
     ap.add_argument("--thr-linear", action="store_true",
                     help="Interpret --score-thr in linear scale (PBH and σ_min(K_n,norm)).")
+    ap.add_argument("--ensemble-type", type=str, default="ginibre")
      
     args = ap.parse_args()
 
@@ -190,7 +191,7 @@ def main():
 
     results = []
     for d in d_vals:
-        out = run_experiment_for_d(cfg, d, score_thr=thr_log)
+        out = run_experiment_for_d(cfg, args.ensemble_type, d, score_thr=thr_log)
         results.append(out)
         print(
             " d={d}: τ_low(logPBH)={tLP:.3e} (⇒ PBH ≤ {LP:.3e}), "

@@ -115,7 +115,7 @@ def draw_system(n: int, m: int, deficiency: int, rng: np.random.Generator,
     base_c, base_u = base_map[ensemble]
     A, B, meta = draw_with_ctrb_rank(
         n=n, m=m, r=r, rng=rng,
-        base_c=base_c, base_u=base_u, embed_random_basis=embed_random_basis
+        ensemble_type=base_c, base_u=base_u, embed_random_basis=embed_random_basis
     )
     return A, B, meta
 

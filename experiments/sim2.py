@@ -134,7 +134,7 @@ def run(n=6, m=2, T=200, dt=0.05, trials=400, noise_std=0.0, seed=123,
     outdir = pathlib.Path(outdir); (outdir/'plots').mkdir(parents=True, exist_ok=True)
 
     # Fix (A,B) with controllability rank n-1
-    A, B, meta = draw_with_ctrb_rank(n, m, r=n-1, rng=rng, base_c='ginibre', base_u='ginibre', embed_random_basis=True)
+    A, B, meta = draw_with_ctrb_rank(n, m, r=n-1, rng=rng, ensemble_type='ginibre', base_u='ginibre', embed_random_basis=True)
     Ad, Bd = cont2discrete_zoh(A,B,dt)
 
     rows = []

@@ -1,14 +1,12 @@
 from __future__ import annotations
 from typing import Optional, Tuple, Union
+import warnings
 import numpy as np
 from numpy.random import Generator
 
 
 def simulate_dt(
-    x0: np.ndarray,
-    Ad: np.ndarray,
-    Bd: np.ndarray,
-    U: np.ndarray,
+    *args: Union[int, np.ndarray],
     noise_std: float = 0.0,
     rng: Optional[Generator] = None,
 ) -> np.ndarray:
@@ -24,7 +22,56 @@ def simulate_dt(
 
     Returns:
         X: array of shape (n, T+1) including initial state
+    Notes:
+        The preferred call signature is ``simulate_dt(x0, Ad, Bd, U, ...)``.
+        For backwards compatibility, the legacy
+        ``simulate_dt(T, x0, Ad, Bd, U, ...)`` form is also accepted but will
+        emit a ``DeprecationWarning``.
     """
+
+    legacy_T: Optional[int] = None
+
+    if len(args) == 4:
+        x0, Ad, Bd, U = args  # type: ignore[misc]
+    elif len(args) == 5:
+        # Backwards-compatible call pattern simulate_dt(T, x0, Ad, Bd, U, ...)
+        legacy_T, x0, Ad, Bd, U = args  # type: ignore[misc]
+        warnings.warn(
+            "simulate_dt(T, x0, Ad, Bd, U, ...) is deprecated; "
+            "call simulate_dt(x0, Ad, Bd, U, ...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    else:
+        raise TypeError(
+            "simulate_dt expected 4 positional arguments (x0, Ad, Bd, U); "
+            "optionally accept legacy 5-argument form (T, x0, Ad, Bd, U)."
+        )
+
+    U = np.asarray(U, dtype=float)
+
+    if legacy_T is not None:
+        if U.ndim != 2:
+            raise ValueError(
+                "Legacy simulate_dt(T, ...) call received non 2-D U with shape {}.".format(
+                    U.shape
+                )
+            )
+        if U.shape[0] != legacy_T and U.shape[1] == legacy_T:
+            warnings.warn(
+                "simulate_dt detected channel-major inputs (m, T) in the deprecated "
+                "signature and will transpose them to time-major (T, m).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            U = np.asarray(U.T, dtype=float)
+        elif U.shape[0] != legacy_T:
+            raise ValueError(
+                "Input horizon mismatch: provided T={} but U has shape {}.".format(
+                    legacy_T, U.shape
+                )
+            )
+
     if U.ndim != 2:
         raise ValueError(f"U must be 2-D (T, m); got shape {U.shape}.")
 
@@ -33,7 +80,7 @@ def simulate_dt(
         raise ValueError(
             f"Bd has {Bd.shape[1]} input columns but U provides m={m} channels."
         )
-    
+
     if rng is None:
         rng = np.random.default_rng()
     
@@ -74,10 +121,13 @@ def prbs(
     if rng is None:
         rng = np.random.default_rng()
         
+    if dwell <= 0:
+        raise ValueError("dwell must be positive.")
+
     U = np.zeros((T, m), dtype=float)
     blocks = int(np.ceil(T / dwell)) + 1
     draws = rng.choice([-1.0, 1.0], size=(blocks, m))
     tiled = np.repeat(draws, dwell, axis=0)[:T, :]
     U[:, :] = tiled
-
+    
     return scale * U

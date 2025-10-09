@@ -71,7 +71,7 @@ def draw_with_properties(n: int, m: int, d: int, ensemble: str,
         tries += 1
         A, B, _meta = draw_with_ctrb_rank(
             n=n, m=m, r=r, rng=rng,
-            base_c=("sparse" if ensemble == "sparse" else ensemble),
+            ensemble_type=("sparse" if ensemble == "sparse" else ensemble),
             base_u=("sparse" if ensemble == "sparse" else ensemble),
             embed_random_basis=(ensemble != "sparse")
         )

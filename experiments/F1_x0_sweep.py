@@ -44,7 +44,7 @@ def _pbh_krylov_badness(Ad, Bd, x0, eps=1e-12):
 # --------------------------
 # Core experiment per d
 # --------------------------
-def run_experiment_for_d(cfg: ExperimentConfig, d: int, score_thr: float | None = None) -> Dict[str, Any]:
+def run_experiment_for_d(cfg: ExperimentConfig, ensemble_type: str, d: int, score_thr: float | None = None) -> Dict[str, Any]:
     """
     Run the x0-filtering experiment for a fixed deficiency d (so rank ctrb = n-d).
     Returns dict with MSE arrays etc.
@@ -54,8 +54,7 @@ def run_experiment_for_d(cfg: ExperimentConfig, d: int, score_thr: float | None 
 
     # Fixed continuous-time pair with controllability rank r = n - d
     A, B, meta = draw_with_ctrb_rank(
-        n=cfg.n, m=cfg.m, r=max(0, cfg.n - d), rng=rng,
-        base_c="stable", base_u="stable"
+        n=cfg.n, m=cfg.m, r=max(0, cfg.n - d), rng=rng, ensemble_type=ensemble_type
     )
     Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
     W_all = left_uncontrollable_subspace(A, B)
@@ -431,6 +430,7 @@ def main():
                          "By default interpreted in LOG-space; add --thr-linear to pass a linear cutoff.")
     ap.add_argument("--thr-linear", action="store_true",
                     help="Interpret --score-thr in linear scale (PBH and σ_min(K_n,norm)).")
+    ap.add_argument("--ensemble-type", type=str, default="ginibre", help="Ensemble type for the experiment.")
     args = ap.parse_args()
 
     outdir = Path(args.outdir)
@@ -454,7 +454,7 @@ def main():
         score_thr = None
 
     for d in d_vals:
-        out = run_experiment_for_d(cfg, d, score_thr=score_thr)
+        out = run_experiment_for_d(cfg, args.ensemble_type, d, score_thr=score_thr)
         results.append(out)
         print(
             "d={d}: τ_logPBH={tLP:.3e} (⇒ PBH ≥ {LP:.3e}), "

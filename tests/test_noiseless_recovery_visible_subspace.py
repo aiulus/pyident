@@ -37,7 +37,7 @@ def test_dmdc_exact_recovery_on_V_good_x0(rng):
     n,m,rk = 10, 2, 6
     A,B,_ = ensembles.draw_with_ctrb_rank(
         n=n, m=m, r=rk, rng=rng,
-        base_c="stable", base_u="stable"  
+        ensemble_type="stable", base_u="stable"  
     )
 
     x0 = ensembles.initial_state_classifier(A,B)["sample_good"](rng)
@@ -62,7 +62,7 @@ def test_dmdc_exact_recovery_on_V_with_two_runs(rng):
     n,m,rk = 10, 2, 6
     A,B,_ = ensembles.draw_with_ctrb_rank(
         n=n, m=m, r=rk, rng=rng,
-        base_c="stable", base_u="stable"
+        ensemble_type="stable", base_u="stable"
     )
     x0 = ensembles.initial_state_classifier(A,B)["sample_good"](rng)
 

@@ -50,14 +50,13 @@ def _log_krylov(Ad: np.ndarray, Bd: np.ndarray, x0: np.ndarray) -> float:
     return float(np.log(max(smin, EPS)))
 
 
-def run_experiment(cfg: ExperimentConfig) -> Dict[str, Any]:
+def run_experiment(cfg: ExperimentConfig, ensemble_type: str) -> Dict[str, Any]:
     """Run initial state filtering experiment."""
     rng = np.random.default_rng(cfg.seed)
     
     # Generate system with rank(R) = n-2
     A, B, meta = draw_with_ctrb_rank(
-        cfg.n, cfg.m, cfg.n - 4, rng,
-        base_c="stable", base_u="stable"
+        cfg.n, cfg.m, cfg.n - 4, rng, ensemble_type=ensemble_type
     )
 
     Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
@@ -128,6 +127,7 @@ def main():
     ap.add_argument("--efs", action="store_true", help="Generate an effect-size plot")
     ap.add_argument("--shift", action="store_true", help="Generate a shift function plot")
     ap.add_argument("--outdir", type=str, default="out_x0_boxplot", help="Directory to save figures")
+    ap.add_argument("ensemble_type", type=str, help="Ensemble type for the experiment")
     args = ap.parse_args()
 
     # Create output directory
@@ -135,8 +135,8 @@ def main():
     outdir.mkdir(exist_ok=True, parents=True)
     
     cfg = ExperimentConfig()
-    out = run_experiment(cfg)
-    
+    out = run_experiment(cfg, args.ensemble_type)
+
     # If no plot type is specified, generate all of them.
     if not any([args.boxplot, args.ecdf, args.violin, args.efs, args.shift]):
         args.boxplot = args.ecdf = args.violin = args.efs = args.shift = True
