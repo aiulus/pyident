@@ -80,6 +80,19 @@ def projector_from_basis(Vbasis):
     return Q @ Q.T
 
 
+def projector_onto_complement(Vbasis: np.ndarray) -> np.ndarray:
+    """Orthogonal projector onto ``span(Vbasis)``\ :sup:`⊥`.
+
+    For an empty basis this reduces to the identity on the ambient space.
+    """
+
+    n = Vbasis.shape[0] if Vbasis.ndim >= 1 else 0
+    if Vbasis.size == 0 or Vbasis.shape[1] == 0:
+        return np.eye(n)
+
+    return np.eye(n) - projector_from_basis(Vbasis)
+
+
 def normalize(x: np.ndarray, tol: float = 1e-12) -> np.ndarray:
     nrm = float(norm(x))
     if nrm <= tol:

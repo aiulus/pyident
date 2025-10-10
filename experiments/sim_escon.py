@@ -155,7 +155,7 @@ def _visibility_sweep_for_algo(
             by_dim_visB[k].append(errs["errB_vis_block_rel"])
             by_dim_darkA[k].append(errs["errA_dark_block_rel"])
             by_dim_darkB[k].append(errs["errB_dark_block_rel"])
-            # Unified (A/B mean) errors  # NEW
+            # Unified (A-B mean) errors  # NEW
             unified_std = 0.5 * (errs["errA_rel"] + errs["errB_rel"])
             unified_vis = 0.5 * (errs["errA_vis_block_rel"] + errs["errB_vis_block_rel"])
             by_dim_unified_std[k].append(unified_std)
@@ -169,76 +169,64 @@ def _visibility_sweep_for_algo(
 
     import matplotlib.pyplot as plt
 
+    # ---------- Figure 1: A/B — Standard vs V(x0)-basis (visible) ----------
+
     dims_sorted = list(sorted(dims, reverse=True))  # n..down..5
-    fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(8, 6), sharex=True)
-    # A
-    dataA = [np.asarray(by_dim_stdA[k], float) for k in dims_sorted]
-    axes[0].boxplot(dataA, whis=(5, 95), showfliers=False)
-    axes[0].set_title(f"{algo_name}: Standard-basis error (A)")
-    axes[0].set_ylabel("Relative error")
-    axes[0].grid(True, axis="y", linestyle="--", alpha=0.6)
-    # B
-    dataB = [np.asarray(by_dim_stdB[k], float) for k in dims_sorted]
-    axes[1].boxplot(dataB, whis=(5, 95), showfliers=False)
-    axes[1].set_title(f"{algo_name}: Standard-basis error (B)")
-    axes[1].set_xlabel("dim $V(x_0)$")
-    axes[1].set_ylabel("Relative error")
-    axes[1].grid(True, axis="y", linestyle="--", alpha=0.6)
+    fig1, axes1 = plt.subplots(nrows=2, ncols=2, figsize=(12, 6), sharex=True)
 
-    axes[1].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
-    fig.tight_layout()
-    fig.savefig(out_dir / f"vis_sweep_{algo_name}_std.png", dpi=150)
-    plt.close(fig)
+    # A — standard basis (top-left)
+    dataA_std = [np.asarray(by_dim_stdA[k], float) for k in dims_sorted]
+    axes1[0, 0].boxplot(dataA_std, whis=(5, 95), showfliers=False)
+    axes1[0, 0].set_title("A — Standard basis")
+    axes1[0, 0].set_ylabel("Relative error")
+    axes1[0, 0].grid(True, axis="y", linestyle="--", alpha=0.6)
 
-    # ---------- plotting: adapted basis (visible/dark blocks) ----------
-    fig2, axes2 = plt.subplots(nrows=2, ncols=2, figsize=(12, 6), sharex=True, sharey=False)
-    # A visible / A dark
+    # A — V(x0)-basis (visible block) (bottom-left)
     dataA_vis = [np.asarray(by_dim_visA[k], float) for k in dims_sorted]
-    dataA_dark = [np.asarray(by_dim_darkA[k], float) for k in dims_sorted]
-    axes2[0, 0].boxplot(dataA_vis, whis=(5, 95), showfliers=False)
-    axes2[0, 0].set_title("A: visible block")
-    axes2[0, 0].set_ylabel("Rel. error")
-    axes2[0, 0].grid(True, axis="y", linestyle="--", alpha=0.6)
+    axes1[1, 0].boxplot(dataA_vis, whis=(5, 95), showfliers=False)
+    axes1[1, 0].set_title("A — V(x0)-basis (visible)")
+    axes1[1, 0].set_xlabel("dim $V(x_0)$")
+    axes1[1, 0].set_ylabel("Relative error")
+    axes1[1, 0].grid(True, axis="y", linestyle="--", alpha=0.6)
+    axes1[1, 0].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
 
-    axes2[0, 1].boxplot(dataA_dark, whis=(5, 95), showfliers=False)
-    axes2[0, 1].set_title("A: dark block")
-    axes2[0, 1].grid(True, axis="y", linestyle="--", alpha=0.6)
+    # B — standard basis (top-right)
+    dataB_std = [np.asarray(by_dim_stdB[k], float) for k in dims_sorted]
+    axes1[0, 1].boxplot(dataB_std, whis=(5, 95), showfliers=False)
+    axes1[0, 1].set_title("B — Standard basis")
+    axes1[0, 1].grid(True, axis="y", linestyle="--", alpha=0.6)
 
-    # B visible / B dark
+    # B — V(x0)-basis (visible block) (bottom-right)
     dataB_vis = [np.asarray(by_dim_visB[k], float) for k in dims_sorted]
-    dataB_dark = [np.asarray(by_dim_darkB[k], float) for k in dims_sorted]
-    axes2[1, 0].boxplot(dataB_vis, whis=(5, 95), showfliers=False)
-    axes2[1, 0].set_title("B: visible block")
-    axes2[1, 0].set_ylabel("Rel. error")
-    axes2[1, 0].grid(True, axis="y", linestyle="--", alpha=0.6)
+    axes1[1, 1].boxplot(dataB_vis, whis=(5, 95), showfliers=False)
+    axes1[1, 1].set_title("B — V(x0)-basis (visible)")
+    axes1[1, 1].set_xlabel("dim $V(x_0)$")
+    axes1[1, 1].grid(True, axis="y", linestyle="--", alpha=0.6)
+    axes1[1, 1].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
 
-    axes2[1, 1].boxplot(dataB_dark, whis=(5, 95), showfliers=False)
-    axes2[1, 1].set_title("B: dark block")
-    axes2[1, 1].grid(True, axis="y", linestyle="--", alpha=0.6)
+    # subtle vertical separator between A (left col) and B (right col)
+    #fig1.lines.append(plt.Line2D([0.5, 0.5], [0.08, 0.95], transform=fig1.transFigure, linewidth=1))
 
-    for ax in (axes2[1, 0], axes2[1, 1]):
-        ax.set_xlabel("dim $V(x_0)$")
-        ax.set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
+    fig1.suptitle(f"{algo_name}: Standard vs V(x0)-basis errors", y=0.98)
+    fig1.tight_layout()
+    fig1.savefig(out_dir / f"vis_sweep_{algo_name}_std_vs_V.png", dpi=150)
+    plt.close(fig1)
 
-    fig2.suptitle(f"{algo_name}: Adapted-basis errors", y=0.98)
-    fig2.tight_layout()
-    fig2.savefig(out_dir / f"vis_sweep_{algo_name}_adapted.png", dpi=150)
-    plt.close(fig2)
 
-        # ---------- NEW: unified (A/B mean) errors: standard vs V(x0)-basis ----------
+        # ---------- NEW: unified (A-B mean) errors: standard vs V(x0)-basis ----------
     fig3, axes3 = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharex=True)
 
     # Left: standard basis unified
     uni_std_data = [np.asarray(by_dim_unified_std[k], float) for k in dims_sorted]
     axes3[0].boxplot(uni_std_data, whis=(5, 95), showfliers=False)
-    axes3[0].set_title(f"{algo_name}: Unified error (A/B mean) — Standard basis")
-    axes3[0].set_ylabel("Relative error (A/B mean)")
+    axes3[0].set_title(f"{algo_name}: Unified error (A-B mean) — Standard basis")
+    axes3[0].set_ylabel("Relative error (A-B mean)")
     axes3[0].grid(True, axis="y", linestyle="--", alpha=0.6)
 
     # Right: V(x0)-basis unified (visible block)
     uni_vis_data = [np.asarray(by_dim_unified_vis[k], float) for k in dims_sorted]
     axes3[1].boxplot(uni_vis_data, whis=(5, 95), showfliers=False)
-    axes3[1].set_title(f"{algo_name}: Unified error (A/B mean) — V(x0)-basis")
+    axes3[1].set_title(f"{algo_name}: Unified error (A-B mean) — V(x0)-basis")
     axes3[1].grid(True, axis="y", linestyle="--", alpha=0.6)
 
     # Shared x-ticks
