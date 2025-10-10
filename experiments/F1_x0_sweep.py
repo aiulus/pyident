@@ -25,6 +25,21 @@ from ..projectors import left_uncontrollable_subspace
 # --- scoring helpers ---
 EPS = 1e-18
 
+def orth(A: np.ndarray) -> np.ndarray:
+    if A.size == 0:
+        return np.zeros((A.shape[0], 0))
+    U, S, _ = np.linalg.svd(A, full_matrices=False)
+    tol = max(A.shape) * np.finfo(float).eps * (S[0] if S.size else 1.0)
+    r = int((S > tol).sum())
+    return U[:, :r]
+
+def projector_from_basis(W: np.ndarray) -> np.ndarray:
+    n = W.shape[0]
+    if W.shape[1] == 0:
+        return np.eye(n)
+    # assume W columns orthonormal
+    return np.eye(n) - W @ W.T
+
 
 def _log_pbh(A: np.ndarray, B: np.ndarray, x0: np.ndarray) -> float:
     m = float(pbh_margin_structured(A, B, x0))  # CT pair
@@ -44,16 +59,24 @@ def _pbh_krylov_badness(Ad, Bd, x0, eps=1e-12):
 # --------------------------
 # Core experiment per d
 # --------------------------
-def run_experiment_for_d(cfg: ExperimentConfig, ensemble_type: str, seed: int, d: int, score_thr: float | None = None) -> Dict[str, Any]:
+def run_experiment_for_d(cfg: ExperimentConfig,
+                          ensemble_type: str, 
+                          seed: int, 
+                          d: int, 
+                          score_thr: float | None = None,
+                          filter_metric: str = "pbh") -> Dict[str, Any]:
     """
     Run the x0-filtering experiment for a fixed deficiency d (so rank ctrb = n-d).
     Returns dict with REE arrays etc.
     """
     # Per-d RNG so runs are reproducible but distinct
-    if seed is None:
+    if seed is not None:
         rng = np.random.default_rng(int(seed) + int(d) * 997)
-    else:
+    elif getattr(cfg, "seed", None) is not None:
         rng = np.random.default_rng(int(cfg.seed) + int(d) * 997)
+    else:
+        rng = np.random.default_rng()
+
 
     # Fixed continuous-time pair with controllability rank r = n - d
     A, B, meta = draw_with_ctrb_rank(
@@ -61,6 +84,11 @@ def run_experiment_for_d(cfg: ExperimentConfig, ensemble_type: str, seed: int, d
     )
     Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
     W_all = left_uncontrollable_subspace(A, B)
+    W_all = orth(W_all)
+    P_dark = projector_from_basis(W_all)   # projects onto ker(W^T) = visible subspace V
+
+
+    I = np.eye(A.shape[0])
     rCT, _ = controllability_rank(A, B, order=A.shape[0], rtol=1e-8)
     print(f"[debug] d={d}: CT controllability rank r={rCT} (expect {A.shape[0]-d}), dark_dim={W_all.shape[1]}")
 
@@ -80,61 +108,116 @@ def run_experiment_for_d(cfg: ExperimentConfig, ensemble_type: str, seed: int, d
     # RANDOM x0
     mses_rand: List[float] = []
     logpbh_rand: List[float] = []
+    logk_rand:   List[float] = []
     for _ in range(cfg.n_trials):
         x0 = rng.standard_normal(cfg.n)
         x0 /= np.linalg.norm(x0) + EPS
-        lp = _log_pbh(A, B, x0)     
+        lp = _log_pbh(A, B, x0)
+        lk = _log_krylov(A, B, x0)
         logpbh_rand.append(lp)
+        logk_rand.append(lk)
         mses_rand.append(trial(x0))
 
     # thresholds learned from the random pool (upper-tail gate)
     tau_logpbh_quant = float(np.quantile(logpbh_rand, cfg.q_filter))
+    tau_logk_quant   = float(np.quantile(logk_rand,   cfg.q_filter))
     # if a hard cutoff is provided, use it (in log-space) for BOTH metrics
     if score_thr is not None:
         tau_logpbh = float(score_thr)
+        tau_logk   = float(score_thr)
     else:
         tau_logpbh = tau_logpbh_quant
-    # Linear-scale cutoffs for readability:
-    pbh_cutoff    = float(np.exp(tau_logpbh))
+        tau_logk   = tau_logk_quant
+
+    if filter_metric == "pbh":
+        tau_selected = tau_logpbh
+    elif filter_metric == "krylov":
+        tau_selected = tau_logk
+    else:
+        raise ValueError("filter_metric must be 'pbh' or 'krylov'")
+    
+    def _score_of(x: np.ndarray) -> float:
+        return _log_pbh(A, B, x) if filter_metric == "pbh" else _log_krylov(A, B, x)
 
     # FILTERED x0 using theory-only AND-gate: logPBH >= τ_logPBH AND logσmin(K) >= τ_logK
     mses_filt: List[float] = []
     logpbh_filt: List[float] = []
+    logk_filt:   List[float] = []
     accepted, tries = 0, 0
     max_tries = 1000 * cfg.n_trials
     while accepted < cfg.n_trials and tries < max_tries:
         x0 = rng.standard_normal(cfg.n)
         x0 /= np.linalg.norm(x0) + EPS
-        lp = _log_pbh(A, B, x0)    
+        lp = _log_pbh(A, B, x0)
+        lk = _log_krylov(A, B, x0)
+        s  = lp if filter_metric == "pbh" else lk
         tries += 1
-        if lp >= tau_logpbh:
+        if s >= tau_selected:
             logpbh_filt.append(lp)
+            logk_filt.append(lk)
             mses_filt.append(trial(x0))
             accepted += 1
 
     if accepted < cfg.n_trials:
         raise RuntimeError(f"[d={d}] Could not find enough filtered x0 after {max_tries} tries")
+    
+    def sample_bad_x0(rng, tries=100):
+        for _ in range(tries):
+            v = rng.standard_normal(cfg.n)
+            x = P_dark @ v
+            n = np.linalg.norm(x)
+            if n > 1e-12:
+                return x / n
+        raise RuntimeError("Could not construct a nonzero bad x0 from projection.")
+
+    def sample_good_x0(rng, eta=1e-2, tries=10_000):
+        for _ in range(tries):
+            x = rng.standard_normal(cfg.n); x /= np.linalg.norm(x) + EPS
+            lp = _log_pbh(A, B, x)
+            if lp < tau_logpbh:
+                continue
+            if W_all.shape[1] > 0:
+                z = np.abs(W_all.T @ x)
+                thresh = eta * (np.mean(z) + 1e-15)
+                if np.min(z) < thresh:
+                    continue
+            return x
+        raise RuntimeError("Could not find enough good x0 under PBH + left-excitation.")
+    
+    mses_bad:  List[float] = []
+    mses_good: List[float] = []
+    for _ in range(cfg.n_trials):
+        mses_bad.append(trial(sample_bad_x0(rng)))
+    for _ in range(cfg.n_trials):
+        mses_good.append(trial(sample_good_x0(rng, eta=1e-2)))
+
+    # Linear-scale cutoffs for readability
+    pbh_cutoff    = float(np.exp(tau_logpbh))
+    krylov_cutoff = float(np.exp(tau_logk))
 
 
     return {
         "d": d,
-        "mse_random": np.asarray(mses_rand, float),
-        "mse_filtered": np.asarray(mses_filt, float),
+        "filter_metric": filter_metric,
+
+        "mse_random":  np.asarray(mses_rand, float),
+        "mse_filtered":np.asarray(mses_filt, float),
+        "mse_bad":     np.asarray(mses_bad, float),
+        "mse_good":    np.asarray(mses_good, float),
 
         # theory metrics (random + filtered) and thresholds
-        "logpbh_random": np.asarray(logpbh_rand, float),
-        "logpbh_filtered": np.asarray(logpbh_filt, float),
+        "logpbh_random":  np.asarray(logpbh_rand, float),
+        "logpbh_filtered":np.asarray(logpbh_filt, float),
+        "logk_random":    np.asarray(logk_rand, float),
+        "logk_filtered":  np.asarray(logk_filt, float),
 
         "tau_logpbh": float(tau_logpbh),
+        "tau_logk":   float(tau_logk),
+        "tau_selected": float(tau_selected),
+        "pbh_cutoff": float(pbh_cutoff),
+        "k_cutoff":   float(krylov_cutoff),
 
-        "tau_logpbh_quantile": float(tau_logpbh_quant),
-
-        "pbh_cutoff": float(pbh_cutoff),                 # PBH ≥ val
-
-        "meta": {
-            "tries": int(tries),
-            "max_tries": int(max_tries)
-        }
+        "meta": {"tries": int(tries), "max_tries": int(max_tries)}
     }
 
 
@@ -404,6 +487,14 @@ def main():
                     help="Interpret --score-thr in linear scale (PBH and σ_min(K_n,norm)).")
     ap.add_argument("--ensemble-type", type=str, default="ginibre", help="Ensemble type for the experiment.")
     ap.add_argument("--seed", type=int, help="Random seed for the experiment")
+    ap.add_argument(
+        "--filter-metric",
+        type=str,
+        default="pbh",
+        choices=["pbh", "krylov"],
+        help="Metric to filter x0 by: PBH margin or σ_min(K)."
+    )
+
     args = ap.parse_args()
 
     outdir = Path(args.outdir)
@@ -427,18 +518,20 @@ def main():
         score_thr = None
 
     for d in d_vals:
-        out = run_experiment_for_d(cfg, args.ensemble_type, args.seed, d, score_thr=score_thr)
+        out = run_experiment_for_d(cfg, args.ensemble_type, args.seed, d, score_thr=score_thr, filter_metric=args.filter_metric)
         results.append(out)
         print(
-            "d={d}: τ_logPBH={tLP:.3e} (⇒ PBH ≥ {LP:.3e}), "
-            "quantiles: (PBH {qLP:.3e}), tries={tr}".format(
-                d=out["d"],
+            "d={d}: filter={fm} τ={tau:.3e} (linear≥{lin:.3e}); "
+            "PBH τ={tLP:.3e} (≥{LP:.3e}); K τ={tLK:.3e} (≥{LK:.3e}); tries={tr}".format(
+                d=out["d"], fm=out["filter_metric"],
+                tau=out["tau_selected"], lin=np.exp(out["tau_selected"]),
                 tLP=out["tau_logpbh"], LP=out["pbh_cutoff"],
-                qLP=out["tau_logpbh_quantile"],
+                tLK=out["tau_logk"],   LK=out["k_cutoff"],
                 tr=out["meta"]["tries"],
             )
         )
-        
+
+       
     # Default: make all if none selected
     if not any([args.boxplot, args.ecdf, args.violin, args.efs, args.shift]):
         args.boxplot = args.ecdf = args.violin = args.efs = args.shift = True

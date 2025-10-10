@@ -9,7 +9,7 @@ python -m pyident.experiments.sim3extended --m 2 --property state_dimension --n-
     --samples 100 --x0-samples 500 --outdir results/sim3_state
 
 # Underactuation heat map (vary both n and m)
-python -m pyident.xperiments.sim3extended --property underactuation --n-grid 4:1:8 \
+python -m pyident.experiments.sim3extended --property underactuation --n-grid 4:1:8 \
     --m-grid 1:1:4 --samples 100 --x0-samples 300 \
     --outdir results/sim3_underactuation
 ```
