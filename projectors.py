@@ -72,12 +72,13 @@ def _orth(A: np.ndarray) -> np.ndarray:
     r = int(np.sum(S > tol))
     return U[:, :r]
 
-def projector_from_basis(W: np.ndarray) -> np.ndarray:
-    """If W has orthonormal columns, P = I - W W^T projects onto ker(W^T)."""
-    n = W.shape[0]
-    if W.shape[1] == 0:
-        return np.eye(n)
-    return np.eye(n) - W @ W.T
+def projector_from_basis(Vbasis):
+    n = Vbasis.shape[0] if Vbasis.size else 0
+    if Vbasis.size == 0:
+        return np.zeros((n, n))
+    Q, _ = np.linalg.qr(Vbasis, mode="reduced")
+    return Q @ Q.T
+
 
 def normalize(x: np.ndarray, tol: float = 1e-12) -> np.ndarray:
     nrm = float(norm(x))

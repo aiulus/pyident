@@ -35,6 +35,7 @@ from ..ensembles import (
     ginibre,
     sparse_continuous,
     stable,
+    draw_with_ctrb_rank,
 )
 from ..metrics import (
     cont2discrete_zoh,
@@ -52,6 +53,7 @@ from ..estimators import (
     dmdc_tls,
     moesp_fit,
 )
+from ..projectors import build_projected_x0
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +190,16 @@ def _system_draw(cfg: EstimatorConsistencyConfig, rng: np.random.Generator) -> T
         )
     if cfg.ensemble == "stable":
         return stable(cfg.n, cfg.m, rng)
+    if cfg.ensemble == "A_stbl_B_ctrb":
+        A, B, _meta = draw_with_ctrb_rank(
+            cfg.n,
+            cfg.m,
+            cfg.n,
+            rng,
+            ensemble_type="stable",
+            embed_random_basis=True,
+        )
+        return A, B
     raise ValueError(f"Unsupported ensemble '{cfg.ensemble}' for consistency experiment.")
 
 
@@ -339,54 +351,79 @@ def _sweep_joint_axes(cfg: EstimatorConsistencyConfig, rng: np.random.Generator)
     return pd.DataFrame.from_records(rows)
 
 
-def _select_x0_with_dim(
-    Ad: np.ndarray,
-    Bd: np.ndarray,
+def _prepare_pe_system(
+    cfg: EstimatorConsistencyConfig,
     target_dim: int,
     rng: np.random.Generator,
-    max_tries: int = 500,
-) -> Optional[np.ndarray]:
+    max_tries: int = 64,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Construct a system and initial state with ``dim V(x0) == target_dim``."""
+
+    n = 5
+    m = min(cfg.m, 2)
+    k_off = max(0, n - target_dim)
+
     for _ in range(max_tries):
-        x0 = _sample_unit_sphere(Ad.shape[0], rng)
-        if _visible_basis(Ad, Bd, x0).shape[1] == target_dim:
-            return x0
-    return None
+        A, B, _meta = draw_with_ctrb_rank(
+            n=n,
+            m=m,
+            r=target_dim,
+            rng=rng,
+            ensemble_type="stable",
+            embed_random_basis=True,
+        )
+        Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
+
+        if k_off > 0:
+            seed = rng.standard_normal(n)
+            x0, _, _ = build_projected_x0(Ad, Bd, seed, k_off=k_off, rng=rng, tol=1e-12)
+        else:
+            x0 = _sample_unit_sphere(n, rng)
+
+        Vbasis = _visible_basis(Ad, Bd, x0)
+        if Vbasis.shape[1] == target_dim:
+            return Ad, Bd, x0
+
+    raise RuntimeError(
+        f"Unable to synthesize system with dim V(x0) = {target_dim} after {max_tries} attempts."
+    )
 
 
 def _pe_order_sweep(cfg: EstimatorConsistencyConfig, rng: np.random.Generator) -> pd.DataFrame:
     rows: List[Dict[str, float]] = []
 
     # Base systems ------------------------------------------------------
-    A_base, B_base = ginibre(5, 2, rng)
-    Ad_base, Bd_base = cont2discrete_zoh(A_base, B_base, cfg.dt)
+    Ad_k3, Bd_k3, x0_k3 = _prepare_pe_system(cfg, target_dim=3, rng=rng)
+    Ad_k5, Bd_k5, x0_k5 = _prepare_pe_system(cfg, target_dim=5, rng=rng)
 
-    x0_k3 = _select_x0_with_dim(Ad_base, Bd_base, 3, rng)
-    if x0_k3 is None:
-        raise RuntimeError("Unable to find an initial state with dim V(x0) = 3 for n=5 system.")
+    systems = (
+        ("k3", Ad_k3, Bd_k3, x0_k3),
+        ("k5", Ad_k5, Bd_k5, x0_k5),
+    )
 
-    x0_full = _select_x0_with_dim(Ad_base, Bd_base, 5, rng)
-    if x0_full is None:
-        # fall back to default random state
-        x0_full = _sample_unit_sphere(5, rng)
+    # Ensure inputs share a consistent number of channels
+    m_input = systems[0][2].shape[1]
+    if any(Bd.shape[1] != m_input for _, _, Bd, _ in systems):
+        raise RuntimeError("PE sweep systems must share the same input dimension.")
 
     algs = _estimate_algorithms()
 
     for target_order in range(1, cfg.pe_order_max + 1):
         dwell = max(1, int(round(cfg.pe_dwell_scale / max(1, target_order))))
         for trial in range(cfg.pe_trials_per_order):
-            U = prbs_dt(cfg.T, Bd_base.shape[1], scale=cfg.u_scale, dwell=dwell, rng=rng)
+            U = prbs_dt(cfg.T, m_input, scale=cfg.u_scale, dwell=dwell, rng=rng)
             pe_est = estimate_pe_order(U, s_max=min(cfg.pe_order_max, cfg.T // 2))
 
-            for label, x0 in (("k3", x0_k3), ("k5", x0_full)):
-                Vbasis = _visible_basis(Ad_base, Bd_base, x0)
-                X = simulate_dt(x0, Ad_base, Bd_base, U, noise_std=cfg.noise_std, rng=rng)
+            for label, Ad, Bd, x0 in systems:
+                Vbasis = _visible_basis(Ad, Bd, x0)
+                X = simulate_dt(x0, Ad, Bd, U, noise_std=cfg.noise_std, rng=rng)
                 X0, X1 = X[:, :-1], X[:, 1:]
                 U_cm = U.T
                 zstats = regressor_stats(X0, U_cm, rtol_rank=1e-12)
 
                 for name, estimator in algs.items():
                     Ahat, Bhat = estimator(X0, X1, U_cm)
-                    errs = _estimation_errors(Ahat, Bhat, Ad_base, Bd_base, Vbasis)
+                    errs = _estimation_errors(Ahat, Bhat, Ad, Bd, Vbasis)
                     rows.append({
                         "system_label": label,
                         "algo": name,

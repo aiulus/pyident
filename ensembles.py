@@ -302,7 +302,7 @@ def draw_with_ctrb_rank(
     B = Q @ B_blk
 
     # (5) verify controllability rank exactly r (use full order=n and robust rtol)
-    rtols = (1e-10, 1e-8, 1e-6)
+    rtols = (1e-10, 1e-8, 1e-6, 1e-12, 1e-14)
     rk_final = None
     for rtol in rtols:
         rk_final, R_basis_num = controllability_rank(A, B, order=n, rtol=rtol)
