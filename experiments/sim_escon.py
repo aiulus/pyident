@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
+import argparse  # NEW
 import pathlib
 
 import numpy as np
@@ -61,6 +62,9 @@ class EstimatorConsistencyConfig(ExperimentConfig):
     max_x0_draws: int = 256
     """Maximum attempts allowed when sampling an initial state with target dim ``V``."""
 
+    det: bool = False   # NEW: toggle deterministic Krylov-based x0 construction
+    """If True, use Krylov-based construction to hit target dim V(x0) instead of rejection sampling."""
+
     save_dir: pathlib.Path = field(default_factory=lambda: pathlib.Path("out_estimator_consistency"))
 
     def __post_init__(self) -> None:
@@ -83,30 +87,26 @@ def _sample_unit_sphere(n: int, rng: np.random.Generator) -> np.ndarray:
 
 def _visible_basis(Ad: np.ndarray, Bd: np.ndarray, x0: np.ndarray) -> np.ndarray:
     from ..metrics import build_visible_basis_dt
-
     return build_visible_basis_dt(Ad, Bd, x0, tol=1e-12)
+
 
 def _orthonormal_basis(M: np.ndarray, tol: float = 1e-12) -> np.ndarray:
     """Return an orthonormal basis for the column space of ``M``."""
-
     if M.size == 0:
         return np.zeros((M.shape[0], 0))
-
     U, s, _ = np.linalg.svd(M, full_matrices=False)
     if s.size == 0:
         return np.zeros((M.shape[0], 0))
-    
     cutoff = tol * max(M.shape)
     rank = int(np.sum(s > cutoff))
     return U[:, :rank]
 
+
 def _reachable_basis(A: np.ndarray, B: np.ndarray, tol: float = 1e-12) -> np.ndarray:
     """Compute an orthonormal basis for the reachable subspace of ``(A, B)``."""
-    """Return an orthonormal basis for the reachable subspace of ``(A, B)``."""
-
     n = A.shape[0]
     zero = np.zeros(n)
-    # ``unrestricted`` spans the iterated images of both ``A`` and ``B``
+    # ``unrestricted`` spans iterated images of both ``A`` and ``B``
     K = unified_generator(A, B, zero, mode="unrestricted")
     return _orthonormal_basis(K, tol=tol)
 
@@ -138,10 +138,8 @@ def _identifiability_summary(Ad: np.ndarray, Bd: np.ndarray, x0: np.ndarray) -> 
 
 def _adapted_basis(Vbasis: np.ndarray, n: int, tol: float = 1e-12) -> Tuple[np.ndarray, int]:
     """Return an orthonormal basis whose first ``k`` columns span ``Vbasis``."""
-
     if Vbasis.size == 0:
         return np.eye(n), 0
-
     U, s, _ = np.linalg.svd(Vbasis, full_matrices=True)
     k = int(np.sum(s > tol))
     return U, k
@@ -243,6 +241,87 @@ def _prepare_partially_identifiable_system(
         f"Unable to synthesise a system with reachable dimension {dim_visible} after {cfg.max_system_draws} attempts."
     )
 
+
+# ---------- NEW: deterministic Krylov-based x0 constructor ----------
+def _construct_x0_with_dimV(
+    Ad: np.ndarray,
+    Bd: np.ndarray,
+    Rbasis: np.ndarray,
+    dim_visible: int,
+    rng: np.random.Generator,
+    tol: float = 1e-12,
+    max_tries: int = 8,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Deterministic/near-deterministic construction of x0 with target k=dim_visible.
+    Works inside the reachable subspace basis Rbasis (n×r). Builds a Krylov ladder
+    for Ar = R^T Ad R and picks the k-th new direction.
+    """
+    r = int(Rbasis.shape[1])
+    k = int(dim_visible)
+    if not (1 <= k <= r):
+        raise ValueError(f"Requested dim V(x0) k={k} must lie in [1, r={r}].")
+
+    Ar = Rbasis.T @ Ad @ Rbasis  # r×r
+    for attempt in range(max_tries):
+        # seed
+        y0 = rng.standard_normal(r)
+        nrm = float(np.linalg.norm(y0))
+        if nrm <= tol:
+            continue
+        y0 /= nrm
+
+        # build Krylov columns: [y0, Ar y0, ..., Ar^{k-1} y0]
+        Kcols = []
+        v = y0
+        for _ in range(k):
+            Kcols.append(v)
+            v = Ar @ v
+        K = np.column_stack(Kcols)  # r×k
+
+        # orthonormalize K to get an ONB of K_k
+        Q, _ = np.linalg.qr(K, mode="reduced")  # r×q, q<=k
+        if Q.shape[1] < k:
+            # unlucky seed produced deficient Krylov growth; retry
+            continue
+
+        # pick the k-th new direction in K_k \ K_{k-1}
+        y = Q[:, k - 1]
+        x0 = Rbasis @ y
+        x0 /= float(np.linalg.norm(x0) + 1e-15)
+
+        Vbasis = _visible_basis(Ad, Bd, x0)
+        if Vbasis.shape[1] == k:
+            return x0, Vbasis
+
+        # micro-nudge inside K_k away from K_{k-1}, then retry verify
+        if k >= 2:
+            y = Q[:, k - 1] + 1e-3 * Q[:, k - 2]
+        else:
+            y = Q[:, 0] + 1e-3 * rng.standard_normal(r)
+        y /= float(np.linalg.norm(y) + 1e-15)
+        x0 = Rbasis @ y
+        x0 /= float(np.linalg.norm(x0) + 1e-15)
+        Vbasis = _visible_basis(Ad, Bd, x0)
+        if Vbasis.shape[1] == k:
+            return x0, Vbasis
+
+    # Fallback: if repeated seeds fail (rare), use the original rejection sampler
+    return _sample_visible_initial_state(Ad, Bd, Rbasis, k, rng, max_attempts=256)
+
+
+def _sample_visible_initial_state_det(
+    Ad: np.ndarray,
+    Bd: np.ndarray,
+    Rbasis: np.ndarray,
+    dim_visible: int,
+    rng: np.random.Generator,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Thin wrapper to call the deterministic constructor."""
+    return _construct_x0_with_dimV(Ad, Bd, Rbasis, dim_visible, rng)
+
+
+# ---------- Original rejection-sampling path (unchanged) ----------
 def _sample_visible_initial_state(
     Ad: np.ndarray,
     Bd: np.ndarray,
@@ -252,7 +331,6 @@ def _sample_visible_initial_state(
     max_attempts: int,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Sample ``x0`` such that ``dim V(x0)`` equals ``dim_visible``."""
-    
     n = Ad.shape[0]
     for _ in range(max_attempts):
         if dim_visible >= n:
@@ -263,10 +341,8 @@ def _sample_visible_initial_state(
             nrm = float(np.linalg.norm(x0))
             if nrm <= 1e-12:
                 continue
-
             x0 = x0 / nrm
         Vbasis = _visible_basis(Ad, Bd, x0)
-
         if Vbasis.shape[1] == dim_visible:
             return x0, Vbasis
     raise RuntimeError(
@@ -278,6 +354,7 @@ def _draw_prbs(cfg: EstimatorConsistencyConfig, rng: np.random.Generator, dim_vi
     dwell = max(1, int(round(cfg.prbs_dwell_scale / max(1, dim_visible))))
     U = prbs_dt(cfg.T, cfg.m, scale=cfg.u_scale, dwell=dwell, rng=rng)
     return U, dwell
+
 
 def _partially_identifiable_trials(cfg: EstimatorConsistencyConfig, rng: np.random.Generator) -> pd.DataFrame:
     records: List[Dict[str, float]] = []
@@ -293,14 +370,21 @@ def _partially_identifiable_trials(cfg: EstimatorConsistencyConfig, rng: np.rand
             Ad, Bd, Rbasis = _prepare_partially_identifiable_system(cfg, rng, dim_visible)
 
             for x_idx in range(cfg.n_x0_per_system):
-                x0, Vbasis = _sample_visible_initial_state(
-                    Ad,
-                    Bd,
-                    Rbasis,
-                    dim_visible,
-                    rng,
-                    cfg.max_x0_draws,
-                )
+                # --- choose track: deterministic vs. rejection ---
+                if getattr(cfg, "det", False):  # NEW
+                    x0, Vbasis = _sample_visible_initial_state_det(
+                        Ad, Bd, Rbasis, dim_visible, rng
+                    )
+                else:
+                    x0, Vbasis = _sample_visible_initial_state(
+                        Ad,
+                        Bd,
+                        Rbasis,
+                        dim_visible,
+                        rng,
+                        cfg.max_x0_draws,
+                    )
+
                 ident = _identifiability_summary(Ad, Bd, x0)
 
                 for signal_idx in range(cfg.n_signal_realizations):
@@ -448,7 +532,14 @@ def run_experiment(cfg: Optional[EstimatorConsistencyConfig] = None) -> Dict[str
 
 
 def main() -> None:
+    # NEW: simple CLI to toggle deterministic x0 construction
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--det", action="store_true",
+                    help="Use deterministic Krylov-based x0 construction (target dim V(x0)).")
+    args, _ = ap.parse_known_args()
+
     cfg = EstimatorConsistencyConfig()
+    cfg.det = bool(args.det)
     run_experiment(cfg)
 
 
