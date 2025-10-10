@@ -53,7 +53,6 @@ from ..estimators import (
     dmdc_tls,
     moesp_fit,
 )
-from ..projectors import build_projected_x0
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +115,29 @@ def _visible_basis(Ad: np.ndarray, Bd: np.ndarray, x0: np.ndarray) -> np.ndarray
     from ..metrics import build_visible_basis_dt
 
     return build_visible_basis_dt(Ad, Bd, x0, tol=1e-12)
+
+
+def _orthonormal_basis(M: np.ndarray, tol: Optional[float] = None) -> np.ndarray:
+    """Return an orthonormal basis for the column space of ``M``."""
+
+    if M.size == 0:
+        return np.zeros((M.shape[0], 0))
+
+    U, s, _ = np.linalg.svd(M, full_matrices=False)
+    if tol is None:
+        tol = max(M.shape) * np.finfo(float).eps * (s[0] if s.size else 1.0)
+
+    r = int((s > tol).sum())
+    return U[:, :r]
+
+
+def _reachable_basis(A: np.ndarray, B: np.ndarray, tol: float = 1e-12) -> np.ndarray:
+    """Compute an orthonormal basis for the reachable subspace of ``(A, B)``."""
+
+    n = A.shape[0]
+    zero = np.zeros(n)
+    K = unified_generator(A, B, zero, mode="unrestricted")
+    return _orthonormal_basis(K, tol=tol)
 
 
 def _identifiability_summary(Ad: np.ndarray, Bd: np.ndarray, x0: np.ndarray) -> Dict[str, float]:
@@ -191,7 +213,7 @@ def _system_draw(cfg: EstimatorConsistencyConfig, rng: np.random.Generator) -> T
     if cfg.ensemble == "stable":
         return stable(cfg.n, cfg.m, rng)
     if cfg.ensemble == "A_stbl_B_ctrb":
-        A, B, _meta = draw_with_ctrb_rank(
+        A, B, _ = draw_with_ctrb_rank(
             cfg.n,
             cfg.m,
             cfg.n,
@@ -361,10 +383,9 @@ def _prepare_pe_system(
 
     n = 5
     m = min(cfg.m, 2)
-    k_off = max(0, n - target_dim)
 
     for _ in range(max_tries):
-        A, B, _meta = draw_with_ctrb_rank(
+        A, B, _ = draw_with_ctrb_rank(
             n=n,
             m=m,
             r=target_dim,
@@ -374,9 +395,17 @@ def _prepare_pe_system(
         )
         Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
 
-        if k_off > 0:
-            seed = rng.standard_normal(n)
-            x0, _, _ = build_projected_x0(Ad, Bd, seed, k_off=k_off, rng=rng, tol=1e-12)
+        R_basis = _reachable_basis(Ad, Bd, tol=1e-12)
+        if R_basis.shape[1] != target_dim:
+            continue
+
+        if target_dim < n:
+            coeff = rng.standard_normal(target_dim)
+            x0 = R_basis @ coeff
+            nrm = float(np.linalg.norm(x0))
+            if nrm <= 1e-12:
+                continue
+            x0 /= nrm
         else:
             x0 = _sample_unit_sphere(n, rng)
 
