@@ -26,7 +26,252 @@ from ..estimators import (
     dmdc_pinv,
     dmdc_tls,
     moesp_fit,
+    node_fit, 
+    sindy_fit
 )
+
+def _sweep_estimators() -> Mapping[str, Callable[[np.ndarray, np.ndarray, np.ndarray, float], Tuple[np.ndarray, np.ndarray]]]:
+    """
+    Return callables that accept (X0, X1, U_cm, dt) and return (Ahat, Bhat).
+    """
+    return {
+        "SINDy": lambda X0, X1, U_cm, dt: sindy_fit(X0, X1, U_cm, dt),
+        "MOESP": lambda X0, X1, U_cm, dt: moesp_fit(X0, X1, U_cm),
+        "DMDc":  lambda X0, X1, U_cm, dt: dmdc_tls(X0, X1, U_cm),
+        "NODE":  lambda X0, X1, U_cm, dt: node_fit(X0, X1, U_cm, dt, epochs=200),
+    }
+
+
+# ---------- NEW: PRBS helper ensuring reasonable richness ----------
+def _draw_rich_prbs_for_dim(cfg: EstimatorConsistencyConfig, rng: np.random.Generator, dim_visible: int) -> Tuple[np.ndarray, int]:
+    """
+    Try to draw a reasonably rich PRBS (short dwell) for the given visible dimension.
+    We keep T fixed (cfg.T) for reproducibility; dwell=1 maximizes variation.
+    """
+    dwell = 1
+    U = prbs_dt(cfg.T, cfg.m, scale=cfg.u_scale, dwell=dwell, rng=rng)
+    # Optional: you can check PE here and warn if it falls short
+    try:
+        pe_est = estimate_pe_order(U, s_max=min(cfg.pe_order_max, cfg.T // 2))
+        if pe_est < dim_visible:
+            # Still proceed; typically T and dwell=1 are enough in practice.
+            pass
+    except Exception:
+        pass
+    return U, dwell
+
+
+# ---------- NEW: one sweep run for a single algorithm ----------
+def _visibility_sweep_for_algo(
+    cfg: EstimatorConsistencyConfig,
+    algo_name: str,
+    rng: np.random.Generator,
+    ensemble_size: int = 200,
+    dims: Optional[Sequence[int]] = None,
+    out_dir: Optional[pathlib.Path] = None,
+) -> None:
+    """
+    For a chosen estimator, build ensembles over dimV = n..5, simulate, fit, and save two figures:
+      1) standard basis errors (A, B) as boxplots,
+      2) adapted-basis errors (visible/dark) as boxplots for A and B.
+    """
+    algos = _sweep_estimators()
+    if algo_name not in algos:
+        raise ValueError(f"Unknown algorithm '{algo_name}'. Available: {list(algos.keys())}")
+    estimator = algos[algo_name]
+
+    n = cfg.n
+    if n < 10:
+        raise ValueError(f"This sweep assumes n=10; got n={n}. Increase cfg.n to 10.")
+    # dimV in {n, n-1, ..., max(5, n-5)}
+    if dims is None:
+        dim_min = max(5, n - 5)
+        dims = list(range(n, dim_min - 1, -1))
+
+    # Storage per dimension
+    by_dim_stdA: Dict[int, List[float]] = {k: [] for k in dims}
+    by_dim_stdB: Dict[int, List[float]] = {k: [] for k in dims}
+    by_dim_visA: Dict[int, List[float]] = {k: [] for k in dims}
+    by_dim_visB: Dict[int, List[float]] = {k: [] for k in dims}
+    by_dim_darkA: Dict[int, List[float]] = {k: [] for k in dims}
+    by_dim_darkB: Dict[int, List[float]] = {k: [] for k in dims}
+    by_dim_unified_std: Dict[int, List[float]] = {k: [] for k in dims}   # NEW
+    by_dim_unified_vis: Dict[int, List[float]] = {k: [] for k in dims}   # NEW
+
+
+    base = getattr(cfg, "partial_base_ensemble", None) or cfg.ensemble
+    base = "stable" if base == "A_stbl_B_ctrb" else base
+
+    for k in dims:
+        # Build ensemble of size ensemble_size at this visible dimension
+        count = 0
+        while count < ensemble_size:
+            # Draw a system with reachable rank = k
+            try:
+                A, B, _ = draw_with_ctrb_rank(
+                    n=cfg.n, m=cfg.m, r=k, rng=rng, ensemble_type=base, embed_random_basis=True
+                )
+                Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
+                Rbasis = _reachable_basis(Ad, Bd, tol=1e-12)
+                if Rbasis.shape[1] != k:
+                    continue
+            except Exception:
+                continue
+
+            # Build x0 either deterministically (Krylov) or via rejection (legacy)
+            if getattr(cfg, "det", False):
+                try:
+                    x0, Vbasis = _sample_visible_initial_state_det(Ad, Bd, Rbasis, k, rng)
+                except Exception:
+                    # tiny fallback, try legacy once
+                    try:
+                        x0, Vbasis = _sample_visible_initial_state(Ad, Bd, Rbasis, k, rng, cfg.max_x0_draws)
+                    except Exception:
+                        continue
+            else:
+                try:
+                    x0, Vbasis = _sample_visible_initial_state(Ad, Bd, Rbasis, k, rng, cfg.max_x0_draws)
+                except Exception:
+                    continue
+
+            # Input and simulation
+            U, _ = _draw_rich_prbs_for_dim(cfg, rng, k)
+            X = simulate_dt(x0, Ad, Bd, U, noise_std=cfg.noise_std, rng=rng)
+            X0, X1 = X[:, :-1], X[:, 1:]
+            U_cm = U.T  # estimators accept (m,T)
+
+            # Fit
+            try:
+                Ahat, Bhat = estimator(X0, X1, U_cm, cfg.dt)
+            except Exception:
+                # Skip rare failures
+                continue
+
+            # Errors
+            errs = _estimation_errors(Ahat, Bhat, Ad, Bd, Vbasis)
+            by_dim_stdA[k].append(errs["errA_rel"])
+            by_dim_stdB[k].append(errs["errB_rel"])
+            by_dim_visA[k].append(errs["errA_vis_block_rel"])
+            by_dim_visB[k].append(errs["errB_vis_block_rel"])
+            by_dim_darkA[k].append(errs["errA_dark_block_rel"])
+            by_dim_darkB[k].append(errs["errB_dark_block_rel"])
+            # Unified (A/B mean) errors  # NEW
+            unified_std = 0.5 * (errs["errA_rel"] + errs["errB_rel"])
+            unified_vis = 0.5 * (errs["errA_vis_block_rel"] + errs["errB_vis_block_rel"])
+            by_dim_unified_std[k].append(unified_std)
+            by_dim_unified_vis[k].append(unified_vis)
+
+            count += 1
+
+    # ---------- plotting: standard-basis ----------
+    out_dir = out_dir or (cfg.save_dir / "vis_sweep")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    import matplotlib.pyplot as plt
+
+    dims_sorted = list(sorted(dims, reverse=True))  # n..down..5
+    fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(8, 6), sharex=True)
+    # A
+    dataA = [np.asarray(by_dim_stdA[k], float) for k in dims_sorted]
+    axes[0].boxplot(dataA, whis=(5, 95), showfliers=False)
+    axes[0].set_title(f"{algo_name}: Standard-basis error (A)")
+    axes[0].set_ylabel("Relative error")
+    axes[0].grid(True, axis="y", linestyle="--", alpha=0.6)
+    # B
+    dataB = [np.asarray(by_dim_stdB[k], float) for k in dims_sorted]
+    axes[1].boxplot(dataB, whis=(5, 95), showfliers=False)
+    axes[1].set_title(f"{algo_name}: Standard-basis error (B)")
+    axes[1].set_xlabel("dim $V(x_0)$")
+    axes[1].set_ylabel("Relative error")
+    axes[1].grid(True, axis="y", linestyle="--", alpha=0.6)
+
+    axes[1].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
+    fig.tight_layout()
+    fig.savefig(out_dir / f"vis_sweep_{algo_name}_std.png", dpi=150)
+    plt.close(fig)
+
+    # ---------- plotting: adapted basis (visible/dark blocks) ----------
+    fig2, axes2 = plt.subplots(nrows=2, ncols=2, figsize=(12, 6), sharex=True, sharey=False)
+    # A visible / A dark
+    dataA_vis = [np.asarray(by_dim_visA[k], float) for k in dims_sorted]
+    dataA_dark = [np.asarray(by_dim_darkA[k], float) for k in dims_sorted]
+    axes2[0, 0].boxplot(dataA_vis, whis=(5, 95), showfliers=False)
+    axes2[0, 0].set_title("A: visible block")
+    axes2[0, 0].set_ylabel("Rel. error")
+    axes2[0, 0].grid(True, axis="y", linestyle="--", alpha=0.6)
+
+    axes2[0, 1].boxplot(dataA_dark, whis=(5, 95), showfliers=False)
+    axes2[0, 1].set_title("A: dark block")
+    axes2[0, 1].grid(True, axis="y", linestyle="--", alpha=0.6)
+
+    # B visible / B dark
+    dataB_vis = [np.asarray(by_dim_visB[k], float) for k in dims_sorted]
+    dataB_dark = [np.asarray(by_dim_darkB[k], float) for k in dims_sorted]
+    axes2[1, 0].boxplot(dataB_vis, whis=(5, 95), showfliers=False)
+    axes2[1, 0].set_title("B: visible block")
+    axes2[1, 0].set_ylabel("Rel. error")
+    axes2[1, 0].grid(True, axis="y", linestyle="--", alpha=0.6)
+
+    axes2[1, 1].boxplot(dataB_dark, whis=(5, 95), showfliers=False)
+    axes2[1, 1].set_title("B: dark block")
+    axes2[1, 1].grid(True, axis="y", linestyle="--", alpha=0.6)
+
+    for ax in (axes2[1, 0], axes2[1, 1]):
+        ax.set_xlabel("dim $V(x_0)$")
+        ax.set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
+
+    fig2.suptitle(f"{algo_name}: Adapted-basis errors", y=0.98)
+    fig2.tight_layout()
+    fig2.savefig(out_dir / f"vis_sweep_{algo_name}_adapted.png", dpi=150)
+    plt.close(fig2)
+
+        # ---------- NEW: unified (A/B mean) errors: standard vs V(x0)-basis ----------
+    fig3, axes3 = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharex=True)
+
+    # Left: standard basis unified
+    uni_std_data = [np.asarray(by_dim_unified_std[k], float) for k in dims_sorted]
+    axes3[0].boxplot(uni_std_data, whis=(5, 95), showfliers=False)
+    axes3[0].set_title(f"{algo_name}: Unified error (A/B mean) — Standard basis")
+    axes3[0].set_ylabel("Relative error (A/B mean)")
+    axes3[0].grid(True, axis="y", linestyle="--", alpha=0.6)
+
+    # Right: V(x0)-basis unified (visible block)
+    uni_vis_data = [np.asarray(by_dim_unified_vis[k], float) for k in dims_sorted]
+    axes3[1].boxplot(uni_vis_data, whis=(5, 95), showfliers=False)
+    axes3[1].set_title(f"{algo_name}: Unified error (A/B mean) — V(x0)-basis")
+    axes3[1].grid(True, axis="y", linestyle="--", alpha=0.6)
+
+    # Shared x-ticks
+    for ax in axes3:
+        ax.set_xlabel("dim $V(x_0)$")
+        ax.set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
+
+    fig3.tight_layout()
+    fig3.savefig(out_dir / f"vis_sweep_{algo_name}_unified.png", dpi=150)
+    plt.close(fig3)
+
+
+
+# ---------- NEW: wrapper to run the full sweep for several algorithms ----------
+def run_visibility_sweep_plots(
+    cfg: Optional[EstimatorConsistencyConfig] = None,
+    algos: Optional[Sequence[str]] = None,
+    ensemble_size: int = 200,
+    out_dir: Optional[pathlib.Path] = None,
+) -> None:
+    if cfg is None:
+        cfg = EstimatorConsistencyConfig()
+    rng = np.random.default_rng(cfg.seed)
+
+    all_algos = list(_sweep_estimators().keys())
+    use_algos = list(algos) if algos is not None else all_algos
+
+    out_dir = out_dir or (cfg.save_dir / "vis_sweep")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for name in use_algos:
+        _visibility_sweep_for_algo(cfg, name, rng, ensemble_size=ensemble_size, dims=None, out_dir=out_dir)
+
 
 
 # ---------------------------------------------------------------------------
@@ -536,11 +781,27 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--det", action="store_true",
                     help="Use deterministic Krylov-based x0 construction (target dim V(x0)).")
-    args, _ = ap.parse_known_args()
+    ap.add_argument("--vis", action="store_true",
+                    help="Run visibility-dimension sweep and save figures per algorithm.")
+    ap.add_argument("--vis-ntrials", type=int, default=200,
+                    help="Ensemble size per visible dimension (default: 200).")
+    ap.add_argument("--vis-outdir", type=str, default=None,
+                    help="Output directory for sweep figures (defaults to escons_alg_sweep).")
+    ap.add_argument("--algos", type=str, default="SINDy,MOESP,DMDc,NODE",
+                    help="Comma-separated list of algorithms to include.")
 
+    args, _ = ap.parse_known_args()
     cfg = EstimatorConsistencyConfig()
     cfg.det = bool(args.det)
-    run_experiment(cfg)
+
+    if args.vis:
+        out_dir = pathlib.Path(args.vis_outdir) if args.vis_outdir else None
+        algos = [s.strip() for s in args.algos.split(",") if s.strip()]
+        run_visibility_sweep_plots(cfg, algos=algos, ensemble_size=int(args.vis_ntrials), out_dir=out_dir)
+    else:
+        # default behavior: run the original experiment
+        run_experiment(cfg)
+
 
 
 if __name__ == "__main__":
