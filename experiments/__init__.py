@@ -12,5 +12,6 @@ __all__: List[str] = [
     'sim_eqv_cl',
     'sim_eqvcl_sweep',
     'sim_undera',
-    'sim_sparse'
+    'sim_sparse',
+    "sim_pe"
 ]
