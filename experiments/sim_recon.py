@@ -57,6 +57,7 @@ class TrajectoryReconConfig(ExperimentConfig):
     outdir: Path = field(default_factory=lambda: Path("out_trajectory_recon"))
     force_hurwitz: bool = True
     stability_margin: float = 0.05
+    sepax: bool = False
 
 
 def _select_estimator(name: str) -> Estimator:
@@ -181,12 +182,15 @@ def run_experiment(cfg: TrajectoryReconConfig) -> Dict[str, object]:
     return results
 
 
-def _plot_trajectories(trials: Sequence[Dict[str, object]], outdir: Path) -> None:
+def _plot_trajectories_overlay(
+    trials: Sequence[Dict[str, object]], outdir: Path
+) -> None:
     rows = len(trials)
     fig, axes = plt.subplots(rows, 2, figsize=(12, 3.0 * rows), sharex=True)
     if rows == 1:
         axes = np.asarray([axes])
-    colors = plt.cm.tab10(np.linspace(0, 1, trials[0]["X_true"].shape[0]))
+    cmap = plt.cm.get_cmap("tab10", trials[0]["X_true"].shape[0])
+    colors = [cmap(idx) for idx in range(trials[0]["X_true"].shape[0])]
 
     for idx, trial in enumerate(trials):
         ax_true = axes[idx, 0]
@@ -227,6 +231,72 @@ def _plot_trajectories(trials: Sequence[Dict[str, object]], outdir: Path) -> Non
     fig.savefig(outdir / "trajectories_overlay.png", dpi=150)
     plt.close(fig)
 
+def _plot_trajectories_sepax(
+    trials: Sequence[Dict[str, object]], outdir: Path
+) -> None:
+    for trial in trials:
+        time = trial["time"]
+        X_true = trial["X_true"]
+        recon_list = trial["recon"]
+        dim_visible = trial["dim_visible"]
+        n_states = X_true.shape[0]
+
+        cmap = plt.cm.get_cmap("tab10", n_states)
+        colors = [cmap(idx) for idx in range(n_states)]
+
+        fig, axes = plt.subplots(
+            n_states,
+            2,
+            figsize=(12, max(2.5 * n_states, 4.0)),
+            sharex=True,
+        )
+        if n_states == 1:
+            axes = np.asarray([axes])
+
+        mean_recon = np.mean(np.stack(recon_list, axis=0), axis=0)
+
+        for state_idx, color in enumerate(colors):
+            ax_true = axes[state_idx, 0]
+            ax_recon = axes[state_idx, 1]
+
+            ax_true.plot(time, X_true[state_idx, :], color=color)
+            ax_true.set_ylabel(f"$x_{state_idx + 1}$")
+            ax_true.grid(True, linestyle="--", alpha=0.5)
+            if state_idx == 0:
+                ax_true.set_title(f"True trajectory — dim V(x0) = {dim_visible}")
+
+            for X_hat in recon_list:
+                ax_recon.plot(time, X_hat[state_idx, :], color=color, alpha=0.08)
+
+            ax_recon.plot(time, mean_recon[state_idx, :], color=color, linewidth=1.5)
+            ax_recon.plot(
+                time,
+                X_true[state_idx, :],
+                color=color,
+                linestyle="--",
+                linewidth=1.0,
+            )
+            ax_recon.grid(True, linestyle="--", alpha=0.5)
+            if state_idx == 0:
+                ax_recon.set_title("Reconstructed trajectories")
+
+            if state_idx == n_states - 1:
+                ax_true.set_xlabel("Time")
+                ax_recon.set_xlabel("Time")
+
+        fig.tight_layout()
+        fig.savefig(outdir / f"trajectories_sepax_dim_{dim_visible}.png", dpi=150)
+        plt.close(fig)
+
+
+def _plot_trajectories(
+    trials: Sequence[Dict[str, object]], outdir: Path, *, sepax: bool
+) -> None:
+    _plot_trajectories_overlay(trials, outdir)
+    if sepax:
+        _plot_trajectories_sepax(trials, outdir)
+
+
 
 def _plot_error_vs_deficiency(trials: Sequence[Dict[str, object]], outdir: Path) -> None:
     deficiencies = [trial["deficiency"] for trial in trials]
@@ -247,20 +317,51 @@ def _plot_error_vs_deficiency(trials: Sequence[Dict[str, object]], outdir: Path)
 def _plot_error_vs_identifiability(trials: Sequence[Dict[str, object]], outdir: Path) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharey=True)
 
-    for trial in trials:
+    cmap = plt.cm.get_cmap("tab10", len(trials))
+    for idx, trial in enumerate(trials):
+        color = cmap(idx)
         deficiency = trial["deficiency"]
-        mean_error = float(np.mean(trial["errors"]))
-        sigma = trial["sigma_min"]
-        eta_vals = trial["eta0"]
+        errors = np.asarray(trial["errors"], float)
+        sigma_vals = np.asarray(trial["sigma_min"], float)
+        eta_vals = np.asarray(trial["eta0"], float)
 
-        axes[0].scatter(np.mean(sigma), mean_error, label=f"d={deficiency}")
-        axes[0].set_xlabel(r"Mean $\sigma_{\min}$ of generator")
+        axes[0].scatter(
+            sigma_vals,
+            errors,
+            color=color,
+            alpha=0.15,
+            edgecolors="none",
+        )
+        axes[0].scatter(
+            [np.mean(sigma_vals)],
+            [np.mean(errors)],
+            color=color,
+            edgecolors="black",
+            linewidths=0.8,
+            label=f"d={deficiency}",
+        )
 
-        axes[1].scatter(np.mean(eta_vals), mean_error, label=f"d={deficiency}")
-        axes[1].set_xlabel(r"Mean $\eta_0$")
+        axes[1].scatter(
+            eta_vals,
+            errors,
+            color=color,
+            alpha=0.15,
+            edgecolors="none",
+        )
+        axes[1].scatter(
+            [np.mean(eta_vals)],
+            [np.mean(errors)],
+            color=color,
+            edgecolors="black",
+            linewidths=0.8,
+            label=f"d={deficiency}",
+        )
+
+    axes[0].set_xlabel(r"$\sigma_{\min}$ of generator")
+    axes[1].set_xlabel(r"$\eta_0$")
 
     for ax in axes:
-        ax.set_ylabel("Mean relative trajectory error")
+        ax.set_ylabel("Relative trajectory error")
         ax.grid(True, linestyle="--", alpha=0.6)
     axes[0].set_title(r"Error vs. generator $\sigma_{\min}$")
     axes[1].set_title(r"Error vs. $\eta_0$")
@@ -279,7 +380,11 @@ def save_figures(results: Dict[str, object]) -> None:
 
     trials: Sequence[Dict[str, object]] = results["trials"]
 
-    _plot_trajectories(trials, outdir)
+    cfg: TrajectoryReconConfig = results["cfg"]
+
+    cfg: TrajectoryReconConfig = results["cfg"]
+
+    _plot_trajectories(trials, outdir, sepax=cfg.sepax)
     _plot_error_vs_deficiency(trials, outdir)
     _plot_error_vs_identifiability(trials, outdir)
 
@@ -302,8 +407,12 @@ def main() -> None:
                     help="Disable shifting random A draws to ensure stability")
     ap.add_argument("--stability-margin", type=float, default=0.05,
                     help="Real-part margin enforced when stabilising random A")
-
     ap.set_defaults(force_hurwitz=True)
+    ap.add_argument(
+        "--sepax",
+        action="store_true",
+        help="Save additional trajectory plots with separate axes per state",
+    )
 
     args = ap.parse_args()
 
@@ -322,6 +431,7 @@ def main() -> None:
         outdir=Path(args.outdir),
         force_hurwitz=args.force_hurwitz,
         stability_margin=args.stability_margin,
+        sepax=args.sepax,
     )
 
     results = run_experiment(cfg)

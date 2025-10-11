@@ -10,6 +10,15 @@ python -m pyident.experiments.sim_regcomb --axes "sparsity, ndim" \
     --sparsity-grid 0.1:0.1:1.0 --ndim-grid 2:2:20 --samples 100 \
     --x0-samples 100 --outdir results/sim3_sparse_state
 
+# Two-axis sweep over state dimension and underactuation
+python -m pyident.experiments.sim_regcomb --axes "ndim, underactuation" \
+    --ndim-grid 2:2:20 --samples 100 \
+    --x0-samples 100 --outdir results/sim3_state_underactuation
+
+python -m pyident.experiments.sim_regcomb --axes "underactuation, sparsity" \
+        --sparsity-grid 0.1:0.1:0.9 --samples 100 \
+        --x0-samples 100 --outdir results/sim3_underactuation_sparsity
+
 # Smaller run for faster testing
 python -m pyident.experiments.sim_regcomb --axes "sparsity, ndim" \
     --sparsity-grid 0.1:0.2:1.0 --ndim-grid 2:4:20 --samples 10 \
