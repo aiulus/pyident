@@ -10,12 +10,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from ..config import ExperimentConfig
-from ..ensembles import draw_with_ctrb_rank
 from ..estimators import dmdc_pinv, dmdc_tls, moesp_fit
-from ..metrics import cont2discrete_zoh, eta0, unified_generator
+from ..metrics import eta0, unified_generator
 from ..signals import estimate_pe_order
 from ..simulation import prbs, simulate_dt
-from .visible_sampling import construct_x0_with_dim_visible, reachable_basis
+from .visible_sampling import (
+    VisibleDrawConfig,
+    construct_x0_with_dim_visible,
+    prepare_system_with_visible_dim,
+)
 
 
 Estimator = Callable[[np.ndarray, np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]
@@ -70,22 +73,9 @@ def run_experiment(cfg: TrajectoryReconConfig) -> Dict[str, object]:
     rng = np.random.default_rng(int(cfg.seed))
     estimator = _select_estimator(cfg.estimator)
 
-    # Draw a single partially identifiable system (full rank to allow dim sweeps).
-    A, B, _ = draw_with_ctrb_rank(
-        n=cfg.n,
-        m=cfg.m,
-        r=cfg.n,
-        rng=rng,
-        ensemble_type=cfg.ensemble,
-        embed_random_basis=True,
-    )
-    Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
-
     # Shared PE input signal for all visibility levels.
     U = prbs(cfg.T, cfg.m, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
     pe_order = estimate_pe_order(U, s_max=min(cfg.T // 2, cfg.n + cfg.m))
-
-    Rbasis = reachable_basis(Ad, Bd)
 
     dims = _visible_dims(cfg.n)
 
@@ -98,7 +88,20 @@ def run_experiment(cfg: TrajectoryReconConfig) -> Dict[str, object]:
         "trials": [],
     }
 
+    base_ensemble = "stable" if cfg.ensemble == "A_stbl_B_ctrb" else cfg.ensemble
+
     for dim_visible in dims:
+        draw_cfg = VisibleDrawConfig(
+            n=cfg.n,
+            m=cfg.m,
+            dt=cfg.dt,
+            dim_visible=dim_visible,
+            ensemble=base_ensemble,
+            tol=1e-12,
+        )
+
+        _, _, Ad, Bd, Rbasis = prepare_system_with_visible_dim(draw_cfg, rng)
+        
         x0, Vbasis = construct_x0_with_dim_visible(
             Ad,
             Bd,
