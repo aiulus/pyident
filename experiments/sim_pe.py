@@ -30,9 +30,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from ..tests.conftest import horizon
+
 from ..config import ExperimentConfig
 from ..estimators import dmdc_tls
-from ..metrics import projected_errors
+from ..metrics import projected_errors, build_visible_basis_dt
 from ..signals import estimate_moment_pe_order, estimate_pe_order
 from ..simulation import prbs, simulate_dt
 from .visible_sampling import VisibleDrawConfig, draw_system_state_with_visible_dim
@@ -57,13 +59,14 @@ class PEVisibleConfig(ExperimentConfig):
     pe_orders: Sequence[int] = tuple(range(1, 11))
     trials_per_order: int = 25
     T_padding: int = 10
-    T_min: int = 40
+    T_min: int = 0
     max_system_attempts: int = 500
     max_x0_attempts: int = 256
     visible_tol: float = 1e-8
     eps_norm: float = 1e-12
     outdir: str = "out_pe_vs_visible"
     deterministic_x0: bool = False
+    enforce_exact_block_pe: bool = True
 
     def __post_init__(self) -> None:  # type: ignore[override]
         super().__post_init__()
@@ -73,8 +76,8 @@ class PEVisibleConfig(ExperimentConfig):
             raise ValueError("pe_orders cannot be empty.")
         if min(self.pe_orders) <= 0:
             raise ValueError("pe_orders must be positive integers.")
-        if self.T_min <= 0:
-            raise ValueError("T_min must be positive.")
+        if self.T_min < 0:
+            raise ValueError("T_min must be non-negative.")
         if self.T_padding < 0:
             raise ValueError("T_padding must be non-negative.")
         if self.max_x0_attempts <= 0:
@@ -103,15 +106,58 @@ def _draw_system_with_visible_dim(
         tol=cfg.visible_tol,
         deterministic_x0=cfg.deterministic_x0,
     )
-    return draw_system_state_with_visible_dim(draw_cfg, rng)
+    for _ in range(cfg.max_system_attempts):
+        A, B, Ad, Bd, x0, P = draw_system_state_with_visible_dim(draw_cfg, rng)
+        Qv = build_visible_basis_dt(Ad, Bd, x0, tol=cfg.visible_tol)
+        if Qv.shape[1] == target_dim:
+            return A, B, Ad, Bd, x0, Qv
+
+    raise RuntimeError(
+        "Failed to draw a system whose discrete-time visible subspace matches the "
+        f"requested dimension {target_dim}."
+    )
 
 
 def _horizon_for_order(order: int, cfg: PEVisibleConfig) -> int:
     """Choose T so H_r can be full row rank but H_{r+1} cannot (in principle)."""
     # Full row rank at depth r requires T >= m*r + r - 1
     T_needed = cfg.m * order + order - 1
+    if cfg.enforce_exact_block_pe:
+        return T_needed
     # Keep an optional lower bound if you really need it; default it to 0.
     return max(cfg.T_min, T_needed)
+
+def _make_prbs_with_order(
+    order: int,
+    cfg: PEVisibleConfig,
+    rng: np.random.Generator,
+    max_tries: int = 20,
+) -> Tuple[np.ndarray, int]:
+    """Draw a PRBS sequence that achieves the requested block-PE order."""
+
+    T = _horizon_for_order(order, cfg)
+    best_U: np.ndarray | None = None
+    best_r: int = -1
+    best_score: Tuple[int, int, int] | None = None
+
+    for _ in range(max_tries):
+        U = prbs(T, cfg.m, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
+        r = int(estimate_pe_order(U, s_max=order))
+        r_plus = int(estimate_pe_order(U, s_max=order + 1))
+        if r == order and r_plus < order + 1:
+            return U, r
+
+        excess = max(0, r_plus - order)
+        score = (abs(r - order), excess, r_plus)
+        if best_score is None or score < best_score:
+            best_U = U
+            best_r = r
+            best_score = score
+
+    if best_U is None:
+        best_U = prbs(T, cfg.m, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
+        best_r = int(estimate_pe_order(best_U, s_max=order))
+    return best_U, best_r
 
 
 def _relative_norm(err: float, ref: float, eps: float) -> float:
@@ -178,13 +224,19 @@ def _plot_summary(
 ) -> None:
     """Plot relative errors vs a chosen PE-order column for each scenario."""
     outfile.parent.mkdir(parents=True, exist_ok=True)
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharex=True)
-    metrics = [("errA_rel", "‖Â−A‖₍F₎ / ‖A‖₍F₎"),
-               ("errA_V_rel", "Visible-projected error")]
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharex=True)
+    metrics = [
+        ("errA_rel", "‖Â−A‖₍F₎ / ‖A‖₍F₎"),
+        ("errA_V_rel", "Visible-projected ‖Â−A‖₍F₎"),
+        ("errB_rel", "‖ B̂−B ‖₍F₎ / ‖B‖₍F₎"),
+        ("errB_V_rel", "Visible-projected ‖ B̂−B ‖₍F₎"),
+    ]
 
-    for ax, (col, label) in zip(axes, metrics):
+    for ax, (col, label) in zip(axes.flat, metrics):
         for scenario, linestyle, color in [("partial", "-", "C0"), ("full", "--", "C1")]:
             sub = df[df["scenario"] == scenario]
+            if sub.empty:
+                continue
             grouped = sub.set_index(x_col)[col]
             orders, med, q1, q3 = _aggregate_stat(grouped)
             ax.plot(orders, med, linestyle=linestyle, color=color, label=scenario)
@@ -193,14 +245,15 @@ def _plot_summary(
         ax.set_xlabel(xlabel or x_col)
         ax.set_ylabel(label)
         ax.grid(True, alpha=0.3)
-        # Visual “ceilings”:
-        ax.axvline(3, color="k", linestyle=":", linewidth=1.0,
-                   label="dim V(x0)=3" if ax is axes[0] else None)
-        ax.axvline(5, color="k", linestyle="-.", linewidth=1.0,
-                   label="dim V(x0)=5" if ax is axes[0] else None)
+        if ax is axes[0, 0]:
+            ax.axvline(3, color="k", linestyle=":", linewidth=1.0, label="dim V(x0)=3")
+            ax.axvline(5, color="k", linestyle="-.", linewidth=1.0, label="dim V(x0)=5")
+        else:
+            ax.axvline(3, color="k", linestyle=":", linewidth=1.0)
+            ax.axvline(5, color="k", linestyle="-.", linewidth=1.0)
 
-    axes[0].legend(title="Scenario")
-    fig.suptitle("Estimation error vs PE order (n=5): visible dimension as ceiling")
+    axes[0, 0].legend(title="Scenario")
+    fig.suptitle("Estimation error vs PE order (n=5): ambient vs visible blocks")
     fig.tight_layout(rect=(0, 0, 1, 0.96))
     fig.savefig(outfile, dpi=160)
     plt.close(fig)
@@ -236,9 +289,10 @@ def _run_trial(
     normA = float(np.linalg.norm(Ad, ord="fro"))
     normB = float(np.linalg.norm(Bd, ord="fro"))
 
-    dA_V, dB_V = projected_errors(Ahat, Bhat, Ad, Bd, P)
-    A_vis = float(np.linalg.norm(P.T @ Ad @ P, ord="fro"))
-    B_vis = float(np.linalg.norm(P.T @ Bd, ord="fro"))
+    Q, _ = np.linalg.qr(P)
+    dA_V, dB_V = projected_errors(Ahat, Bhat, Ad, Bd, Q)
+    A_vis = float(np.linalg.norm(Q.T @ Ad @ Q, ord="fro"))
+    B_vis = float(np.linalg.norm(Q.T @ Bd, ord="fro"))
 
     return {
         "scenario": label,
@@ -277,10 +331,8 @@ def run_experiment(cfg: PEVisibleConfig) -> pd.DataFrame:
     max_order = max(cfg.pe_orders)
 
     for order in cfg.pe_orders:
-        horizon = _horizon_for_order(order, cfg)
         for trial in range(cfg.trials_per_order):
-            U = prbs(horizon, cfg.m, scale=cfg.u_scale, dwell=cfg.dwell, rng=input_rng)
-            pe_block = int(estimate_pe_order(U, s_max=max_order))
+            U, pe_block = _make_prbs_with_order(order, cfg, input_rng)
             pe_moment = int(estimate_moment_pe_order(U, r_max=max_order, dt=cfg.dt))
             records.append(_run_trial("partial", U, order, pe_block, pe_moment, partial, cfg))
             records.append(_run_trial("full", U, order, pe_block, pe_moment, full, cfg))
@@ -297,6 +349,23 @@ def run_experiment(cfg: PEVisibleConfig) -> pd.DataFrame:
         x_col="pe_order_actual",
         xlabel="Estimated block-PE order (Hankel)"
     )
+
+    _plot_standard_by_visibility(
+        df,
+        cfg,
+        outdir / "pe_vs_visible_standard_basis_momentPE.png",
+        x_col="pe_order_moment",
+        xlabel="Estimated moment-PE order",
+    )
+
+    _plot_summary(
+        df,
+        cfg,
+        outdir / "pe_vs_visible_ambient_vs_visible_blockPE.png",
+        x_col="pe_order_actual",
+        xlabel="Estimated block-PE order (Hankel)",
+    )
+
 
     return df
 
