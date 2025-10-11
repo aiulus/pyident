@@ -792,6 +792,106 @@ def run(args: argparse.Namespace) -> None:
                 plot_path = outdir / "plots" / f"{name}.png"
                 fig.savefig(plot_path, dpi=200)
                 plt.close(fig)
+                # Create a companion plot that visualizes descent directions with arrows.
+                grad_y, grad_x = np.gradient(data) if data.size else (data, data)
+                descent_x = -grad_x
+                descent_y = -grad_y
+                magnitudes = np.hypot(descent_x, descent_y)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    normalized_x = np.divide(
+                        descent_x,
+                        magnitudes,
+                        out=np.zeros_like(descent_x),
+                        where=magnitudes > 0.0,
+                    )
+                    normalized_y = np.divide(
+                        descent_y,
+                        magnitudes,
+                        out=np.zeros_like(descent_y),
+                        where=magnitudes > 0.0,
+                    )
+
+                arrow_length = 0.35
+                arrow_dx = normalized_x * arrow_length
+                arrow_dy = normalized_y * arrow_length
+
+                arrow_fig, arrow_ax = plt.subplots(figsize=(7.2, 5.2))
+                arrow_ax.set_xlim(-0.5, n_cols - 0.5)
+                arrow_ax.set_ylim(-0.5, n_rows - 0.5)
+                arrow_ax.set_facecolor("white")
+
+                x_coords, y_coords = np.meshgrid(
+                    np.arange(n_cols), np.arange(n_rows)
+                )
+                arrow_ax.quiver(
+                    x_coords,
+                    y_coords,
+                    arrow_dx,
+                    arrow_dy,
+                    color="red",
+                    angles="xy",
+                    scale_units="xy",
+                    scale=1.0,
+                    width=0.01,
+                    headwidth=4,
+                    headlength=6,
+                )
+                arrow_ax.set_xticks(np.arange(n_cols))
+                arrow_ax.set_yticks(np.arange(n_rows))
+                arrow_ax.set_xticklabels(
+                    [format_axis_tick(axes[0], value) for value in pivot.columns]
+                )
+                arrow_ax.set_yticklabels(
+                    [format_axis_tick(axes[1], value) for value in pivot.index]
+                )
+
+                arrow_ax.set_xlabel(x_label)
+                arrow_ax.set_ylabel(y_label)
+                arrow_title = make_heatmap_title(axes[0], axes[1], score_name, sub)
+                arrow_ax.set_title(f"{arrow_title} (descent directions)")
+
+                if special_state_under and pivot.size:
+                    column_values = list(pivot.columns)
+                    row_values = list(pivot.index)
+                    diag_coords: list[tuple[float, float]] = []
+                    for col_idx, col_val in enumerate(column_values):
+                        for row_idx, row_val in enumerate(row_values):
+                            if math.isclose(float(col_val), float(row_val), rel_tol=0.0, abs_tol=1e-9):
+                                diag_coords.append((float(col_idx), float(row_idx)))
+                                break
+                    if diag_coords:
+                        xs, ys = zip(*diag_coords)
+                        arrow_ax.plot(
+                            xs, ys, color="red", linewidth=2.0, solid_capstyle="round"
+                        )
+                        x_start, x_end = xs[0], xs[-1]
+                        y_start, y_end = ys[0], ys[-1]
+                        x_mid = 0.5 * (x_start + x_end)
+                        y_mid = 0.5 * (y_start + y_end)
+                        if len(xs) > 1:
+                            rotation = math.degrees(
+                                math.atan2(y_end - y_start, x_end - x_start)
+                            )
+                        else:
+                            rotation = 45.0
+                        arrow_ax.text(
+                            x_mid,
+                            y_mid - 0.35,
+                            "n = m",
+                            color="red",
+                            fontsize=8,
+                            rotation=rotation,
+                            rotation_mode="anchor",
+                            ha="center",
+                            va="center",
+                        )
+
+                arrow_fig.tight_layout()
+                arrow_name = f"{score_name}_descent_{axes[0]}_{axes[1]}".replace(",", "_")
+                arrow_path = outdir / "plots" / f"{arrow_name}.png"
+                arrow_fig.savefig(arrow_path, dpi=200)
+                plt.close(arrow_fig)
+                
             return
 
         axis = axes[0]
