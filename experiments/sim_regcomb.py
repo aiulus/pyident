@@ -5,24 +5,37 @@
 python -m pyident.experiments.sim_regcomb --n 6 --m 2 --samples 200 --x0-samples 1000 \
     --property density --cond-grid 0:0.05:1 --outdir results/sim3_density
 
-# Two-axis sweep over sparsity and state dimension
+# Full sweeps
+# E1: Sparsity vs. state dimension
 python -m pyident.experiments.sim_regcomb --axes "sparsity, ndim" \
-    --sparsity-grid 0.1:0.1:1.0 --ndim-grid 2:2:20 --samples 100 \
+    --sparsity-grid 0.0:0.1:1.0 --ndim-grid 2:2:20 --samples 100 \
     --x0-samples 100 --outdir results/sim3_sparse_state
 
-# Two-axis sweep over state dimension and underactuation
+# E2: State dimension vs. underactuation
 python -m pyident.experiments.sim_regcomb --axes "ndim, underactuation" \
     --ndim-grid 2:2:20 --samples 100 \
     --x0-samples 100 --outdir results/sim3_state_underactuation
 
+# E3: Underaction vs. sparsity
 python -m pyident.experiments.sim_regcomb --axes "underactuation, sparsity" \
-        --sparsity-grid 0.1:0.1:0.9 --samples 100 \
+        --sparsity-grid 0.0:0.1:1.0 --samples 100 \
         --x0-samples 100 --outdir results/sim3_underactuation_sparsity
 
-# Smaller run for faster testing
+# Smaller runs for faster testing
+# E1: Sparsity vs. state dimension
 python -m pyident.experiments.sim_regcomb --axes "sparsity, ndim" \
-    --sparsity-grid 0.1:0.2:1.0 --ndim-grid 2:4:20 --samples 10 \
+    --sparsity-grid 0.0:0.2:1.0 --ndim-grid 2:4:20 --samples 10 \
     --x0-samples 10 --outdir results/sim3_sparse_state
+
+# E2: State dimension vs. underactuation
+python -m pyident.experiments.sim_regcomb --axes "ndim, underactuation" \
+    --ndim-grid 2:4:20 --samples 10 \
+    --x0-samples 10 --outdir results/sim3_state_underactuation
+
+# E3: Underaction vs. sparsity
+python -m pyident.experiments.sim_regcomb --axes "underactuation, sparsity" \
+        --sparsity-grid 0.0:0.2:1.0 --samples 100 \
+        --x0-samples 100 --outdir results/sim3_underactuation_sparsity
 ```
 """
 from __future__ import annotations
@@ -82,6 +95,7 @@ AXIS_LABEL = {
     "underactuation": "Input dimension m",
 }
 
+DEFAULT_STATE_INPUT_VALUES = tuple(range(2, 21, 2))
 
 def sample_unit_sphere(n: int, rng: np.random.Generator) -> np.ndarray:
     """Uniform sample on the unit sphere S^{n-1}."""
@@ -424,13 +438,17 @@ def build_axis_scenarios(
     if axis_set == {"ndim", "underactuation"}:
         nd_spec = args.ndim_grid or args.n_grid or args.cond_grid
         if nd_spec is None:
-            raise ValueError("an n-dimension grid must be provided when combining axes")
-        n_values = parse_grid(nd_spec)
+            n_values = np.array(DEFAULT_STATE_INPUT_VALUES, dtype=float)
+        else:
+            n_values = parse_grid(nd_spec)
+        default_m_values = [int(val) for val in DEFAULT_STATE_INPUT_VALUES]
         for n_val in n_values:
             n_cur = int(round(n_val))
             if n_cur <= 0:
                 raise ValueError("state dimensions must be positive integers")
-            m_values = underactuation_grid(n_cur)
+            m_values = [m_val for m_val in default_m_values if m_val <= n_cur]
+            if not m_values:
+                m_values = [min(n_cur, base_m)]
             for m_cur in m_values:
                 axis_vals = {"ndim": n_cur, "underactuation": m_cur}
                 append("underactuation", float(n_cur - m_cur), n_cur, m_cur, axis_vals)
@@ -627,20 +645,72 @@ def run(args: argparse.Namespace) -> None:
                     continue
                 pivot = sub.pivot(index=y_axis, columns=x_axis, values="mean")
                 pivot = pivot.sort_index().sort_index(axis=1)
-                plt.figure(figsize=(6.4, 4.8))
-                im = plt.imshow(pivot.to_numpy(), origin="lower", aspect="auto")
-                plt.xticks(range(len(pivot.columns)), pivot.columns)
-                plt.yticks(range(len(pivot.index)), pivot.index)
-                plt.xlabel(x_label)
-                plt.ylabel(y_label)
-                plt.title(f"{score_name} mean vs {axes[0]} and {axes[1]}")
-                cbar = plt.colorbar(im)
+
+                fig, ax = plt.subplots(figsize=(6.4, 4.8))
+                im = ax.imshow(pivot.to_numpy(), origin="lower", aspect="auto")
+                ax.set_xticks(range(len(pivot.columns)))
+                ax.set_xticklabels(pivot.columns)
+                ax.set_yticks(range(len(pivot.index)))
+                ax.set_yticklabels(pivot.index)
+                ax.set_xlabel(x_label)
+                ax.set_ylabel(y_label)
+                ax.set_title(f"{score_name} mean vs {axes[0]} and {axes[1]}")
+                special_state_under = axes[0] == "ndim" and axes[1] == "underactuation"
+                if special_state_under and pivot.size:
+                    column_values = list(pivot.columns)
+                    row_values = list(pivot.index)
+                    diag_coords: list[tuple[float, float]] = []
+                    for col_idx, col_val in enumerate(column_values):
+                        for row_idx, row_val in enumerate(row_values):
+                            if math.isclose(float(col_val), float(row_val), rel_tol=0.0, abs_tol=1e-9):
+                                diag_coords.append((float(col_idx), float(row_idx)))
+                                break
+                    if diag_coords:
+                        xs, ys = zip(*diag_coords)
+                        ax.plot(xs, ys, color="red", linewidth=2.0, solid_capstyle="round")
+                        x_start, x_end = xs[0], xs[-1]
+                        y_start, y_end = ys[0], ys[-1]
+                        x_mid = 0.5 * (x_start + x_end)
+                        y_mid = 0.5 * (y_start + y_end)
+                        if len(xs) > 1:
+                            rotation = math.degrees(math.atan2(y_end - y_start, x_end - x_start))
+                        else:
+                            rotation = 45.0
+                        ax.text(
+                            x_mid,
+                            y_mid - 0.35,
+                            "n = m",
+                            color="red",
+                            fontsize=8,
+                            rotation=rotation,
+                            rotation_mode="anchor",
+                            ha="center",
+                            va="center",
+                        )
+                        arrowprops = dict(arrowstyle="->", color="red", linewidth=1.5)
+                        top_y = len(row_values) - 1
+                        right_x = len(column_values) - 1
+                        ax.annotate(
+                            "",
+                            xy=(right_x + 0.6, -0.4),
+                            xytext=(right_x + 0.6, top_y + 0.4),
+                            arrowprops=arrowprops,
+                            annotation_clip=False,
+                        )
+                        ax.annotate(
+                            "",
+                            xy=(right_x + 0.4, -0.6),
+                            xytext=(right_x - 0.6, -0.6),
+                            arrowprops=arrowprops,
+                            annotation_clip=False,
+                        )
+                cbar = fig.colorbar(im, ax=ax)               
                 cbar.set_label(f"{score_name} score (mean)")
-                plt.tight_layout()
+                fig.tight_layout()
                 name = f"{score_name}_heatmap_{axes[0]}_{axes[1]}".replace(",", "_")
                 plot_path = outdir / "plots" / f"{name}.png"
-                plt.savefig(plot_path, dpi=200)
-                plt.close()
+                fig.savefig(plot_path, dpi=200)
+                plt.close(fig)
             return
 
         axis = axes[0]
