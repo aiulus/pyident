@@ -35,7 +35,7 @@ class PEVisibilityConfig(ExperimentConfig):
     d_max: int = 3
     m: int = 1
     dt: float = 0.05
-    r_max_cap: int = 12
+    r_max_cap: int = 14
     beta_grid: Sequence[float] = (1.0, 1.5)
     N_sys: int = 10
     N_trials: int = 6
@@ -99,13 +99,18 @@ def gen_prbs_for_order(
     beta: float,
     rng: np.random.Generator,
     max_attempts: int = 200,
-) -> Tuple[np.ndarray, int]:
-    """Generate a PRBS input that attains block-PE order ``r`` exactly."""
+) -> Tuple[np.ndarray, int, int]:
+    """Generate a PRBS input that attains block-PE order ``r`` exactly.
+
+    Returns the generated input, the detected PE order, and the number of
+    attempts that were required. The attempt counter is useful for monitoring
+    whether high-order targets require disproportionately long search loops.
+    """
 
     N_min = minimal_length_for_pe_order(cfg.m, r)
     N = int(math.ceil(beta * N_min))
     step = max(1, N // 12)
-    for attempt in range(max_attempts):
+    for attempt in range(1, max_attempts + 1):
         U = prbs_dt(N, cfg.m, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
         try:
             r_est = int(estimate_pe_order(U, s_max=r))
@@ -114,13 +119,13 @@ def gen_prbs_for_order(
         if r_est == r:
             r_plus = int(estimate_pe_order(U, s_max=r + 1)) if r + 1 <= cfg.r_max_cap + 1 else r
             if r_plus < r + 1:
-                return U, r_est
+                return U, r_est, attempt
         N += step
         step = max(1, N // 12)
     # Fall back to best-effort generation by allowing relaxed condition
     U = prbs_dt(N, cfg.m, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
     r_est = int(estimate_pe_order(U, s_max=r))
-    return U, r_est
+    return U, r_est, max_attempts
 
 
 def _draw_system_with_visible_dim(
@@ -169,6 +174,7 @@ def _trial_record(
     r_target: int,
     U: np.ndarray,
     r_actual: int,
+    prbs_attempts: int,
     X0: np.ndarray,
     X1: np.ndarray,
     Ad: np.ndarray,
@@ -193,6 +199,7 @@ def _trial_record(
     unified = 0.5 * (errA_rel + errB_rel)
     unified_vis = 0.5 * (errA_vis_rel + errB_vis_rel)
     success = 1 if unified_vis <= tau else 0
+    finite_unified_vis = 1 if np.isfinite(unified_vis) else 0
     return {
         "seed": seed,
         "system_seed": system_seed,
@@ -206,6 +213,7 @@ def _trial_record(
         "r_target": r_target,
         "r_actual": r_actual,
         "N": int(U.shape[0]),
+        "prbs_attempts": prbs_attempts,
         "estimator": "dmdc_tls",
         "errA_rel": errA_rel,
         "errB_rel": errB_rel,
@@ -214,6 +222,7 @@ def _trial_record(
         "err_unified": unified,
         "err_unified_V": unified_vis,
         "success_V": success,
+        "finite_unified_V": finite_unified_vis,
     }
 
 
@@ -245,7 +254,43 @@ def _partial_corr(x: np.ndarray, y: np.ndarray, z: np.ndarray) -> float:
     return float((r_xy - r_xz * r_yz) / denom)
 
 
-def _ols_summary(d_vals: np.ndarray, n_vals: np.ndarray, r_vals: np.ndarray) -> Dict[str, object]:
+def _partial_corr_with_controls(
+    x: np.ndarray, y: np.ndarray, controls: np.ndarray
+) -> float:
+    if x.size == 0 or y.size == 0:
+        return float("nan")
+    if controls.ndim == 1:
+        controls = controls.reshape(-1, 1)
+    if controls.size == 0:
+        return _pearson(x, y)
+    X_ctrl = np.column_stack([np.ones(x.size), controls])
+    beta_x, *_ = np.linalg.lstsq(X_ctrl, x, rcond=None)
+    beta_y, *_ = np.linalg.lstsq(X_ctrl, y, rcond=None)
+    resid_x = x - X_ctrl @ beta_x
+    resid_y = y - X_ctrl @ beta_y
+    return _pearson(resid_x, resid_y)
+
+
+def _partial_spearman_with_controls(
+    x: np.ndarray, y: np.ndarray, controls: Sequence[np.ndarray]
+) -> float:
+    if x.size == 0 or y.size == 0:
+        return float("nan")
+    xr = pd.Series(x).rank(method="average").to_numpy()
+    yr = pd.Series(y).rank(method="average").to_numpy()
+    if not controls:
+        return _pearson(xr, yr)
+    control_ranks = [pd.Series(c).rank(method="average").to_numpy() for c in controls]
+    ctrl_matrix = np.column_stack(control_ranks)
+    return _partial_corr_with_controls(xr, yr, ctrl_matrix)
+
+
+def _ols_summary(
+    d_vals: np.ndarray,
+    n_vals: np.ndarray,
+    N_vals: np.ndarray,
+    r_vals: np.ndarray,
+) -> Dict[str, object]:
     m = r_vals.size
     if m == 0:
         return {
@@ -257,7 +302,7 @@ def _ols_summary(d_vals: np.ndarray, n_vals: np.ndarray, r_vals: np.ndarray) -> 
             "bic": float("nan"),
             "sigma2": float("nan"),
         }
-    X = np.column_stack([np.ones(m), d_vals, n_vals])
+    X = np.column_stack([np.ones(m), d_vals, n_vals, N_vals])
     coeffs, _, _, _ = np.linalg.lstsq(X, r_vals, rcond=None)
     yhat = X @ coeffs
     resid = r_vals - yhat
@@ -282,6 +327,7 @@ def _ols_summary(d_vals: np.ndarray, n_vals: np.ndarray, r_vals: np.ndarray) -> 
             "intercept": float(coeffs[0]),
             "beta_d": float(coeffs[1]),
             "beta_n": float(coeffs[2]),
+            "beta_N": float(coeffs[3]),
         },
         "n_samples": int(m),
         "rss": rss,
@@ -303,6 +349,7 @@ def _summaries(rstar_df: pd.DataFrame) -> Dict[str, object]:
         r_vals = df["r_star"].to_numpy(dtype=float)
         d_vals = df["d"].to_numpy(dtype=float)
         n_vals = df["n"].to_numpy(dtype=float)
+        N_vals = df["N_mean"].to_numpy(dtype=float)
         spearman_d = _spearman(r_vals, d_vals)
         spearman_n = _spearman(r_vals, n_vals)
         pearson_d = _pearson(r_vals, d_vals)
@@ -312,7 +359,9 @@ def _summaries(rstar_df: pd.DataFrame) -> Dict[str, object]:
         ranks_n = pd.Series(n_vals).rank(method="average").to_numpy()
         partial_d = _partial_corr(ranks_r, ranks_d, ranks_n)
         partial_n = _partial_corr(ranks_r, ranks_n, ranks_d)
-        ols = _ols_summary(d_vals, n_vals, r_vals)
+        partial_d_controls = _partial_spearman_with_controls(r_vals, d_vals, [n_vals, N_vals])
+        partial_n_controls = _partial_spearman_with_controls(r_vals, n_vals, [d_vals, N_vals])
+        ols = _ols_summary(d_vals, n_vals, N_vals, r_vals)
         return {
             "spearman_r_d": spearman_d,
             "spearman_r_n": spearman_n,
@@ -320,6 +369,8 @@ def _summaries(rstar_df: pd.DataFrame) -> Dict[str, object]:
             "pearson_r_n": pearson_n,
             "partial_spearman_d_given_n": partial_d,
             "partial_spearman_n_given_d": partial_n,
+            "partial_spearman_d_given_n_N": partial_d_controls,
+            "partial_spearman_n_given_d_N": partial_n_controls,
             "ols": ols,
             "n_samples": int(df.shape[0]),
         }
@@ -502,7 +553,7 @@ def run(cfg: PEVisibilityConfig) -> None:
                         for t in range(cfg.N_trials):
                             seed_trial = int(rng_sys.integers(2**63 - 1))
                             rng_trial = np.random.default_rng(seed_trial)
-                            U, r_act = gen_prbs_for_order(cfg, r, beta, rng_trial)
+                            U, r_act, attempts = gen_prbs_for_order(cfg, r, beta, rng_trial)
                             X = simulate_dt(x0, Ad, Bd, U, noise_std=cfg.sigma, rng=rng_trial)
                             X0, X1 = X[:, :-1], X[:, 1:]
                             rec = _trial_record(
@@ -515,6 +566,7 @@ def run(cfg: PEVisibilityConfig) -> None:
                                 r,
                                 U,
                                 r_act,
+                                attempts,
                                 X0,
                                 X1,
                                 Ad,
@@ -557,15 +609,24 @@ def run(cfg: PEVisibilityConfig) -> None:
             r_actual_median=("r_actual", "median"),
             trials=("success_V", "size"),
             N_mean=("N", "mean"),
+            prbs_attempts_mean=("prbs_attempts", "mean"),
+            finite_unified_V_rate=("finite_unified_V", "mean"),
         )
     )
     agg_df.to_csv(outdir / "agg.csv", index=False)
 
     rstar_records: List[Dict[str, object]] = []
+    total_groups = 0
+    skipped_mismatch = 0
     for keys, group in agg_df.groupby(
         ["n", "k", "d", "system_id", "system_seed", "beta", "sigma"], as_index=False
     ):
+        total_groups += 1
         group_sorted = group.sort_values("r_target")
+        mismatch = np.abs(group_sorted["r_actual_median"].to_numpy() - group_sorted["r_target"].to_numpy())
+        if np.any(mismatch > 0.5):
+            skipped_mismatch += 1
+            continue
         success_mask = group_sorted["err_unified_V_mean"] <= cfg.tau
         if success_mask.any():
             r_star = int(group_sorted.loc[success_mask, "r_target"].iloc[0])
@@ -585,6 +646,9 @@ def run(cfg: PEVisibilityConfig) -> None:
                 "r_star": r_star,
                 "r_max": int(group_sorted["r_target"].max()),
                 "censored": censored,
+                "N_mean": float(group_sorted["N_mean"].mean()),
+                "prbs_attempts_mean": float(group_sorted["prbs_attempts_mean"].mean()),
+                "finite_unified_V_rate": float(group_sorted["finite_unified_V_rate"].mean()),
             }
         )
     rstar_df = pd.DataFrame(rstar_records)
@@ -592,6 +656,17 @@ def run(cfg: PEVisibilityConfig) -> None:
 
     summary = _summaries(rstar_df)
     summary["tau"] = cfg.tau
+    mean_finite = float(rstar_df["finite_unified_V_rate"].mean()) if not rstar_df.empty else float("nan")
+    summary["diagnostics"] = {
+        "groups_total": total_groups,
+        "groups_skipped_r_actual_mismatch": skipped_mismatch,
+        "mismatch_fraction": float(skipped_mismatch / total_groups) if total_groups else float("nan"),
+        "finite_unified_V_rate_mean": mean_finite,
+        "nan_fraction_mean": float(1.0 - mean_finite) if np.isfinite(mean_finite) else float("nan"),
+        "prbs_attempts_mean": float(rstar_df["prbs_attempts_mean"].mean()) if not rstar_df.empty else float("nan"),
+    }
+    if "counts" in summary:
+        summary["counts"]["skipped_r_actual_mismatch"] = skipped_mismatch
     summary_path = outdir / "summary.json"
     with summary_path.open("w", encoding="utf-8") as fh:
         json.dump(summary, fh, indent=2)
@@ -634,7 +709,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--beta-grid", type=str, default="1.0,1.5")
     parser.add_argument("--systems", type=int, default=10)
     parser.add_argument("--trials", type=int, default=6)
-    parser.add_argument("--r-max-cap", type=int, default=12)
+    parser.add_argument("--r-max-cap", type=int, default=14)
     parser.add_argument("--sigma", type=float, default=0.0)
     parser.add_argument("--tau", type=float, default=0.05)
     parser.add_argument("--seed", type=int, default=42)
