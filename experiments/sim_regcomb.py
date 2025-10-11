@@ -7,12 +7,18 @@ python -m pyident.experiments.sim_regcomb --n 6 --m 2 --samples 200 --x0-samples
 
 # Full sweep (One axis)
 # S1: Sparsity
-# TODO
+python -m pyident.experiments.sim_regcomb --axes "sparsity" \
+    --sparsity-grid 0.0:0.1:1.0 --samples 100 \
+    --x0-samples 100 --outdir results/sim3_sparse
 
 # S2: State dimension
-# TODO
+python -m pyident.experiments.sim_regcomb --axes "ndim" \
+    --ndim-grid 2:2:20 --samples 100 \
+    --x0-samples 100 --outdir results/sim3_state
 
 # S3: Underactuation
+python -m pyident.experiments.sim_regcomb --axes "underactuation" \
+     --samples 100 --x0-samples 100 --outdir results/sim3_underactuation
 
 # Full sweeps (Two axes)
 # E1: Sparsity vs. state dimension
