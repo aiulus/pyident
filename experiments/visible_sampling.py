@@ -168,12 +168,23 @@ def sample_visible_initial_state(
     """Sample ``x0`` such that ``dim V(x0)`` equals ``dim_visible``."""
 
     n = Ad.shape[0]
+    r = int(Rbasis.shape[1])
     for _ in range(max_attempts):
         if dim_visible >= n:
             x0 = _sample_unit_sphere(n, rng)
         else:
-            coeff = rng.standard_normal(dim_visible)
-            x0 = Rbasis @ coeff
+            if r == 0:
+                raise RuntimeError("Reachable basis has zero columns; cannot sample x0.")
+
+            if dim_visible >= r:
+                y = _sample_unit_sphere(r, rng)
+            else:
+                subspace = rng.standard_normal((r, dim_visible))
+                Q, _ = np.linalg.qr(subspace, mode="reduced")
+                coeff = rng.standard_normal(dim_visible)
+                y = Q @ coeff
+
+            x0 = Rbasis @ y
             nrm = float(np.linalg.norm(x0))
             if nrm <= tol:
                 continue
