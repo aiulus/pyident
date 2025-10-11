@@ -55,6 +55,8 @@ def _identifiability_summary(Ad: np.ndarray, Bd: np.ndarray, x0: np.ndarray) -> 
 class TrajectoryReconConfig(ExperimentConfig):
     estimator: str = "dmdc_tls"
     outdir: Path = field(default_factory=lambda: Path("out_trajectory_recon"))
+    force_hurwitz: bool = True
+    stability_margin: float = 0.05
 
 
 def _select_estimator(name: str) -> Estimator:
@@ -98,10 +100,12 @@ def run_experiment(cfg: TrajectoryReconConfig) -> Dict[str, object]:
             dim_visible=dim_visible,
             ensemble=base_ensemble,
             tol=1e-12,
+            force_hurwitz=cfg.force_hurwitz,
+            stability_margin=cfg.stability_margin,
         )
 
         _, _, Ad, Bd, Rbasis = prepare_system_with_visible_dim(draw_cfg, rng)
-        
+
         x0, Vbasis = construct_x0_with_dim_visible(
             Ad,
             Bd,
@@ -112,6 +116,8 @@ def run_experiment(cfg: TrajectoryReconConfig) -> Dict[str, object]:
         )
 
         X_true = simulate_dt(x0, Ad, Bd, U, noise_std=0.0)
+        if not np.all(np.isfinite(X_true)):
+            raise RuntimeError("True trajectory produced non-finite values. Try enabling force_hurwitz or increasing the stability margin.")
         true_norm = float(np.linalg.norm(X_true, ord="fro") + 1e-15)
         true_ident = _identifiability_summary(Ad, Bd, x0)
 
@@ -133,9 +139,16 @@ def run_experiment(cfg: TrajectoryReconConfig) -> Dict[str, object]:
                 continue
 
             X_recon = simulate_dt(x0, Ahat, Bhat, U, noise_std=0.0)
+            if not np.all(np.isfinite(X_recon)):
+                print(f"[warn] skipping unstable reconstruction on trial {trial}: non-finite trajectory")
+                continue
             recon_trajectories.append(X_recon)
 
             err = float(np.linalg.norm(X_recon - X_true, ord="fro") / true_norm)
+            if not np.isfinite(err):
+                print(f"[warn] skipping unstable reconstruction on trial {trial}: error is not finite")
+                recon_trajectories.pop()
+                continue
             traj_errors.append(err)
 
             ident_hat = _identifiability_summary(Ahat, Bhat, x0)
@@ -285,6 +298,12 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=12345, help="Random seed")
     ap.add_argument("--estimator", type=str, default="dmdc_tls", choices=list(_available_estimators().keys()))
     ap.add_argument("--ensemble", type=str, default="ginibre", help="Ensemble used to draw (A,B)")
+    ap.add_argument("--no-force-hurwitz", dest="force_hurwitz", action="store_false",
+                    help="Disable shifting random A draws to ensure stability")
+    ap.add_argument("--stability-margin", type=float, default=0.05,
+                    help="Real-part margin enforced when stabilising random A")
+
+    ap.set_defaults(force_hurwitz=True)
 
     args = ap.parse_args()
 
@@ -301,6 +320,8 @@ def main() -> None:
         estimator=args.estimator,
         ensemble=args.ensemble,
         outdir=Path(args.outdir),
+        force_hurwitz=args.force_hurwitz,
+        stability_margin=args.stability_margin,
     )
 
     results = run_experiment(cfg)

@@ -2,11 +2,11 @@
 
 ```
 # Single-axis sparsity sweep (legacy mode)
-python -m pyident.experiments.sim3extended --n 6 --m 2 --samples 200 --x0-samples 1000 \
+python -m pyident.experiments.sim_combreg --n 6 --m 2 --samples 200 --x0-samples 1000 \
     --property density --cond-grid 0:0.05:1 --outdir results/sim3_density
 
 # Two-axis sweep over sparsity and state dimension
-python -m pyident.experiments.sim3extended --axes "sparsity, ndim" \
+python -m pyident.experiments.sim_combreg --axes "sparsity, ndim" \
     --sparsity-grid 0.1:0.1:1.0 --ndim-grid 2:2:20 --samples 100 \
     --x0-samples 200 --outdir results/sim3_sparse_state
 ```

@@ -58,6 +58,25 @@ class VisibleDrawConfig:
     max_x0_attempts: int = 256
     tol: float = 1e-12
     deterministic_x0: bool = False
+    force_hurwitz: bool = False
+    stability_margin: float = 0.05
+
+
+def _ensure_hurwitz(A: np.ndarray, margin: float = 0.05) -> np.ndarray:
+    """Return a Hurwitz-stable copy of ``A`` with margin ``margin``."""
+
+    if margin < 0:
+        raise ValueError("stability margin must be non-negative")
+
+    if A.size == 0:
+        return A
+
+    lam = np.linalg.eigvals(A)
+    max_real = float(np.max(np.real(lam))) if lam.size else float("-inf")
+    shift = max(0.0, max_real + margin)
+    if shift == 0.0:
+        return A
+    return A - shift * np.eye(A.shape[0], dtype=A.dtype)
 
 
 def prepare_system_with_visible_dim(
@@ -77,6 +96,10 @@ def prepare_system_with_visible_dim(
             ensemble_type=cfg.ensemble,
             embed_random_basis=True,
         )
+        
+        if cfg.force_hurwitz:
+            A = _ensure_hurwitz(A, margin=cfg.stability_margin)
+
         Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
         Rbasis = reachable_basis(Ad, Bd, tol=cfg.tol)
         if Rbasis.shape[1] != cfg.dim_visible:
