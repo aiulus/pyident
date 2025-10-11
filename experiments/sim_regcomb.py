@@ -2,13 +2,18 @@
 
 ```
 # Single-axis sparsity sweep (legacy mode)
-python -m pyident.experiments.sim_combreg --n 6 --m 2 --samples 200 --x0-samples 1000 \
+python -m pyident.experiments.sim_regcomb --n 6 --m 2 --samples 200 --x0-samples 1000 \
     --property density --cond-grid 0:0.05:1 --outdir results/sim3_density
 
 # Two-axis sweep over sparsity and state dimension
-python -m pyident.experiments.sim_combreg --axes "sparsity, ndim" \
+python -m pyident.experiments.sim_regcomb --axes "sparsity, ndim" \
     --sparsity-grid 0.1:0.1:1.0 --ndim-grid 2:2:20 --samples 100 \
-    --x0-samples 200 --outdir results/sim3_sparse_state
+    --x0-samples 100 --outdir results/sim3_sparse_state
+
+# Smaller run for faster testing
+python -m pyident.experiments.sim_regcomb --axes "sparsity, ndim" \
+    --sparsity-grid 0.1:0.2:1.0 --ndim-grid 2:4:20 --samples 10 \
+    --x0-samples 10 --outdir results/sim3_sparse_state
 ```
 """
 from __future__ import annotations
@@ -148,8 +153,25 @@ def parse_grid(spec: str) -> np.ndarray:
         start, step, stop = map(float, parts)
         if step <= 0:
             raise ValueError("grid step must be positive")
-        count = int(math.floor((stop - start) / step + 0.5)) + 1
-        return start + step * np.arange(count)
+        if stop < start:
+            raise ValueError("grid stop must not be smaller than the start value")
+
+        # ``np.arange`` can accumulate floating point error and produce values that
+        # overshoot the requested ``stop`` bound (for example 0.1:0.2:1.0 yields
+        # 1.1).  This is problematic when the grid is used to parameterise
+        # probabilities such as sparsity densities.  Build the sequence manually
+        # and clamp it to the stop value instead.
+        values: list[float] = []
+        current = start
+        # Allow a small tolerance when comparing against ``stop`` so that values
+        # very close to the end-point (e.g. 0.6 + 0.2 ≈ 0.7999999999999999) are
+        # still included.
+        tol = 1e-12 * max(1.0, abs(stop))
+        while current <= stop + tol:
+            values.append(float(current))
+            current += step
+        return np.asarray(values, dtype=float)
+    
     tokens = spec.replace(",", " ").split()
     values = [float(tok) for tok in tokens if tok]
     if not values:
