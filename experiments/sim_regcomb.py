@@ -34,8 +34,8 @@ python -m pyident.experiments.sim_regcomb --axes "ndim, underactuation" \
 
 # E3: Underaction vs. sparsity
 python -m pyident.experiments.sim_regcomb --axes "underactuation, sparsity" \
-        --sparsity-grid 0.0:0.2:1.0 --samples 100 \
-        --x0-samples 100 --outdir results/sim3_underactuation_sparsity
+        --sparsity-grid 0.0:0.2:1.0 --samples 10 \
+        --x0-samples 10 --outdir results/sim3_underactuation_sparsity
 ```
 """
 from __future__ import annotations
@@ -72,6 +72,18 @@ from ..metrics import (
 EPS = 1e-12
 DEFAULT_SCORES: tuple[str, ...] = ("pbh", "krylov", "mu")
 
+SCORE_DISPLAY_NAMES = {
+    "pbh": "PBH score",
+    "krylov": "Krylov score",
+    "mu": "Left eigenvalue score",
+}
+
+AXIS_TITLE_NAMES = {
+    "sparsity": "Sparsity",
+    "ndim": "State Dimension",
+    "underactuation": "Underactuation",
+}
+
 AXIS_ALIASES = {
     "sparsity": "sparsity",
     "sparse": "sparsity",
@@ -90,12 +102,50 @@ AXIS_COLUMN = {
 }
 
 AXIS_LABEL = {
-    "sparsity": "Target density level",
+    "sparsity": "Density level",
     "ndim": "State dimension n",
     "underactuation": "Input dimension m",
 }
 
 DEFAULT_STATE_INPUT_VALUES = tuple(range(2, 21, 2))
+
+def format_axis_tick(axis_name: str, value: Any) -> str:
+    """Format axis tick labels for heatmaps."""
+
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+    if axis_name == "sparsity":
+        return f"{numeric:.1f}"
+    if axis_name in {"ndim", "underactuation"} and math.isclose(
+        numeric, round(numeric), rel_tol=0.0, abs_tol=1e-9
+    ):
+        return f"{int(round(numeric))}"
+    return f"{numeric:g}"
+
+
+def make_heatmap_title(
+    x_axis: str, y_axis: str, score_name: str, data: pd.DataFrame
+) -> str:
+    """Construct a descriptive heatmap title for score summaries."""
+
+    score_label = SCORE_DISPLAY_NAMES.get(score_name, score_name)
+    x_label = AXIS_TITLE_NAMES.get(x_axis, x_axis.title())
+    y_label = AXIS_TITLE_NAMES.get(y_axis, y_axis.title())
+    base_title = f"{x_label} vs. {y_label}"
+
+    if (x_axis, y_axis) == ("underactuation", "sparsity") and "n" in data:
+        n_values = sorted({int(val) for val in data["n"].dropna().unique()})
+        if n_values:
+            if len(n_values) == 1:
+                suffix = f", n = {n_values[0]}"
+            else:
+                suffix = ", n ∈ {" + ", ".join(str(val) for val in n_values) + "}"
+            return f"{base_title} ({score_label}{suffix})"
+
+    return f"{base_title} ({score_label})"
 
 def sample_unit_sphere(n: int, rng: np.random.Generator) -> np.ndarray:
     """Uniform sample on the unit sphere S^{n-1}."""
@@ -441,14 +491,14 @@ def build_axis_scenarios(
             n_values = np.array(DEFAULT_STATE_INPUT_VALUES, dtype=float)
         else:
             n_values = parse_grid(nd_spec)
-        default_m_values = [int(val) for val in DEFAULT_STATE_INPUT_VALUES]
+        default_m_values = sorted(
+            {int(val) for val in DEFAULT_STATE_INPUT_VALUES} | {int(base_m)}
+        )
         for n_val in n_values:
             n_cur = int(round(n_val))
             if n_cur <= 0:
                 raise ValueError("state dimensions must be positive integers")
-            m_values = [m_val for m_val in default_m_values if m_val <= n_cur]
-            if not m_values:
-                m_values = [min(n_cur, base_m)]
+            m_values = default_m_values
             for m_cur in m_values:
                 axis_vals = {"ndim": n_cur, "underactuation": m_cur}
                 append("underactuation", float(n_cur - m_cur), n_cur, m_cur, axis_vals)
@@ -645,16 +695,33 @@ def run(args: argparse.Namespace) -> None:
                     continue
                 pivot = sub.pivot(index=y_axis, columns=x_axis, values="mean")
                 pivot = pivot.sort_index().sort_index(axis=1)
+                if pivot.empty:
+                    continue
 
-                fig, ax = plt.subplots(figsize=(6.4, 4.8))
-                im = ax.imshow(pivot.to_numpy(), origin="lower", aspect="auto")
-                ax.set_xticks(range(len(pivot.columns)))
-                ax.set_xticklabels(pivot.columns)
-                ax.set_yticks(range(len(pivot.index)))
-                ax.set_yticklabels(pivot.index)
+                data = pivot.to_numpy()
+                n_rows, n_cols = data.shape
+                fig, ax = plt.subplots(figsize=(7.2, 5.2))
+                im = ax.imshow(
+                    data,
+                    origin="lower",
+                    aspect="auto",
+                    extent=(-0.5, n_cols - 0.5, -0.5, n_rows - 0.5),
+                )
+                ax.set_xlim(-0.5, n_cols - 0.5)
+                ax.set_ylim(-0.5, n_rows - 0.5)
+                ax.set_xticks(np.arange(n_cols))
+                ax.set_yticks(np.arange(n_rows))
+                ax.set_xticklabels(
+                    [format_axis_tick(axes[0], value) for value in pivot.columns]
+                )
+                ax.set_yticklabels(
+                    [format_axis_tick(axes[1], value) for value in pivot.index]
+                )
+
                 ax.set_xlabel(x_label)
                 ax.set_ylabel(y_label)
-                ax.set_title(f"{score_name} mean vs {axes[0]} and {axes[1]}")
+
+                ax.set_title(make_heatmap_title(axes[0], axes[1], score_name, sub))
                 special_state_under = axes[0] == "ndim" and axes[1] == "underactuation"
                 if special_state_under and pivot.size:
                     column_values = list(pivot.columns)
@@ -687,26 +754,40 @@ def run(args: argparse.Namespace) -> None:
                             ha="center",
                             va="center",
                         )
-                        arrowprops = dict(arrowstyle="->", color="red", linewidth=1.5)
-                        top_y = len(row_values) - 1
-                        right_x = len(column_values) - 1
-                        ax.annotate(
-                            "",
-                            xy=(right_x + 0.6, -0.4),
-                            xytext=(right_x + 0.6, top_y + 0.4),
-                            arrowprops=arrowprops,
-                            annotation_clip=False,
-                        )
-                        ax.annotate(
-                            "",
-                            xy=(right_x + 0.4, -0.6),
-                            xytext=(right_x - 0.6, -0.6),
-                            arrowprops=arrowprops,
-                            annotation_clip=False,
-                        )
-                cbar = fig.colorbar(im, ax=ax)               
+                cbar = fig.colorbar(im, ax=ax, pad=0.02)          
                 cbar.set_label(f"{score_name} score (mean)")
                 fig.tight_layout()
+                fig.canvas.draw()
+                if special_state_under and pivot.size:
+                    #arrowprops = dict(
+                    #    arrowstyle="-|>", color="red", linewidth=2.4, mutation_scale=12
+                    #)
+                    ax_pos = ax.get_position()
+                    cbar_pos = cbar.ax.get_position()
+                    horizontal_y = ax_pos.y0 - 0.07
+                    horizontal_start = ax_pos.x0 + 0.02 * ax_pos.width
+                    horizontal_end = ax_pos.x1 - 0.02 * ax_pos.width
+                    ax.annotate(
+                        "",
+                        xy=(horizontal_end, horizontal_y),
+                        xytext=(horizontal_start, horizontal_y),
+                        xycoords=fig.transFigure,
+                        textcoords=fig.transFigure,
+                        #arrowprops=arrowprops,
+                        annotation_clip=False,
+                    )
+                    vertical_x = cbar_pos.x1 + 0.02
+                    vertical_top = min(cbar_pos.y1, 0.96)
+                    vertical_bottom = max(cbar_pos.y0, 0.08)
+                    ax.annotate(
+                        "",
+                        xy=(vertical_x, vertical_bottom),
+                        xytext=(vertical_x, vertical_top),
+                        xycoords=fig.transFigure,
+                        textcoords=fig.transFigure,
+                        #arrowprops=arrowprops,
+                        annotation_clip=False,
+                    )               
                 name = f"{score_name}_heatmap_{axes[0]}_{axes[1]}".replace(",", "_")
                 plot_path = outdir / "plots" / f"{name}.png"
                 fig.savefig(plot_path, dpi=200)
@@ -743,7 +824,7 @@ def run(args: argparse.Namespace) -> None:
         return
 
     xlabel = {
-        "density": "Target density level",
+        "density": "Density level",
         "deficiency": "Controllability deficiency",
         "state_dimension": "State dimension n",
     }.get(args.property, args.property)
