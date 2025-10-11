@@ -47,14 +47,19 @@ class CoreExperimentConfig(ExperimentConfig):
             self.outdir = Path(self.outdir)
 
 
-def sample_unit_sphere(n: int, rng: np.random.Generator) -> np.ndarray:
-    """Draw a random point from the unit sphere in ``R^n``."""
+def sample_unit_sphere(
+    n: int, rng: np.random.Generator, radius: float = 1.0
+) -> np.ndarray:
+    """Draw a random point from a sphere of ``R^n`` with the given ``radius``."""
+
+    if radius <= 0.0:
+        raise ValueError("radius must be positive.")
 
     v = rng.standard_normal(n)
     nrm = float(np.linalg.norm(v))
     if nrm == 0.0:
-        return sample_unit_sphere(n, rng)
-    return v / nrm
+        return sample_unit_sphere(n, rng, radius=radius)
+    return radius * (v / nrm)
 
 
 def compute_identifiability_metrics(

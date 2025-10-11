@@ -5,7 +5,16 @@
 python -m pyident.experiments.sim_regcomb --n 6 --m 2 --samples 200 --x0-samples 1000 \
     --property density --cond-grid 0:0.05:1 --outdir results/sim3_density
 
-# Full sweeps
+# Full sweep (One axis)
+# S1: Sparsity
+# TODO
+
+# S2: State dimension
+# TODO
+
+# S3: Underactuation
+
+# Full sweeps (Two axes)
 # E1: Sparsity vs. state dimension
 python -m pyident.experiments.sim_regcomb --axes "sparsity, ndim" \
     --sparsity-grid 0.0:0.1:1.0 --ndim-grid 2:2:20 --samples 100 \
@@ -891,7 +900,7 @@ def run(args: argparse.Namespace) -> None:
                 arrow_path = outdir / "plots" / f"{arrow_name}.png"
                 arrow_fig.savefig(arrow_path, dpi=200)
                 plt.close(arrow_fig)
-                
+
             return
 
         axis = axes[0]

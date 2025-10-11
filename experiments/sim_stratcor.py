@@ -53,6 +53,7 @@ class StratifiedCoreConfig(CoreExperimentConfig):
 
     estimators: tuple[str, ...] = ("dmdc_pinv",)
     outdir: Path = Path("out_stratcore")
+    dark_dims: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:  # type: ignore[override]
         super().__post_init__()
@@ -60,6 +61,17 @@ class StratifiedCoreConfig(CoreExperimentConfig):
             raise ValueError("At least one estimator must be specified.")
         if isinstance(self.outdir, str):
             self.outdir = Path(self.outdir)
+        if not self.dark_dims:
+            self.dark_dims = tuple(range(1, self.n))
+        cleaned: List[int] = []
+        for deficiency in self.dark_dims:
+            if deficiency < 0:
+                raise ValueError("dark_dims entries must be non-negative.")
+            if deficiency >= self.n:
+                raise ValueError("dark_dims entries must be less than n.")
+            if deficiency not in cleaned:
+                cleaned.append(deficiency)
+        self.dark_dims = tuple(cleaned)
 
 
 def _available_estimators() -> EstimatorMap:
@@ -112,11 +124,26 @@ def _parse_args(argv: Sequence[str] | None = None) -> StratifiedCoreConfig:
 
     parser.add_argument("--ens-size", type=int, default=24, dest="ens_size", help="Target systems per deficiency bin.")
     parser.add_argument("--x0-samples", type=int, default=8, dest="x0_samples", help="Initial states per system.")
-    parser.add_argument("--x0amp", type=float, default=1.0, help="Scale factor applied to unit-sphere initial states.")
+    parser.add_argument(
+        "--x0amp",
+        type=float,
+        default=1.0,
+        help="Uniform scaling factor applied to the unit-sphere initial states.",
+    )
     parser.add_argument("--noise-std", type=float, default=0.0, dest="noise_std", help="Process noise standard deviation.")
     parser.add_argument("--u-scale", type=float, default=3.0, dest="u_scale", help="PRBS amplitude.")
     parser.add_argument("--dwell", type=int, default=1, help="PRBS dwell time (samples per draw).")
-
+    parser.add_argument(
+        "--dark-dims",
+        type=int,
+        nargs="+",
+        default=None,
+        dest="dark_dims",
+        help=(
+            "List of dark-dimension counts n-dim(V(x0)) to target during stratified sampling. "
+            "Defaults to the integers from 1 to n-1."
+        ),
+    )
     parser.add_argument(
         "--estimators",
         type=str,
@@ -152,6 +179,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> StratifiedCoreConfig:
         u_scale=args.u_scale,
         dwell=args.dwell,
         estimators=tuple(args.estimators),
+        dark_dims=tuple(args.dark_dims) if args.dark_dims is not None else (),
         outdir=Path(args.outdir),
     )
     return cfg
@@ -172,20 +200,24 @@ def _select_estimators(names: Iterable[str]) -> EstimatorMap:
     return selected
 
 
-def _deterministic_dim_sequence(n: int) -> Iterable[int]:
-    for deficiency in range(0, 4):
-        dim_visible = n - deficiency
+def _deterministic_dim_sequence(cfg: StratifiedCoreConfig) -> Iterable[int]:
+    for deficiency in cfg.dark_dims:
+        dim_visible = cfg.n - deficiency
         if dim_visible <= 0:
             continue
         yield dim_visible
 
 
-def _stratified_subset(per_def_records: Dict[int, List[Dict[str, object]]], total_target: int) -> List[Dict[str, object]]:
-    deficiencies = sorted(per_def_records.keys())
-    if not deficiencies:
+def _stratified_subset(
+    per_def_records: Dict[int, List[Dict[str, object]]],
+    total_target: int,
+    deficiencies: Sequence[int],
+) -> List[Dict[str, object]]:
+    deficiency_order = [d for d in deficiencies if d in per_def_records]
+    if not deficiency_order:
         raise RuntimeError("Deterministic engine did not record any tuples.")
 
-    bins = len(deficiencies)
+    bins = len(deficiency_order)
     if total_target < bins:
         raise ValueError(
             "Requested total tuples fewer than number of deficiency bins; increase ens-size or x0-samples."
@@ -194,8 +226,7 @@ def _stratified_subset(per_def_records: Dict[int, List[Dict[str, object]]], tota
     base = total_target // bins
     remainder = total_target % bins
 
-    selected: List[Dict[str, object]] = []
-    for idx, deficiency in enumerate(deficiencies):
+    for idx, deficiency in enumerate(deficiency_order):
         need = base + (1 if idx < remainder else 0)
         available = per_def_records[deficiency]
         if len(available) < need:
@@ -309,7 +340,7 @@ def _run_stratified(cfg: StratifiedCoreConfig, rng: np.random.Generator) -> pd.D
 
     base_ensemble = "stable" if cfg.ensemble == "A_stbl_B_ctrb" else cfg.ensemble
 
-    for dim_visible in _deterministic_dim_sequence(cfg.n):
+    for dim_visible in _deterministic_dim_sequence(cfg):
         deficiency = cfg.n - dim_visible
         per_def_records.setdefault(deficiency, [])
         systems_target = cfg.ens_size
@@ -418,7 +449,7 @@ def _run_stratified(cfg: StratifiedCoreConfig, rng: np.random.Generator) -> pd.D
                     break
 
     total_target = cfg.ens_size * cfg.x0_samples
-    base_records = _stratified_subset(per_def_records, total_target)
+    base_records = _stratified_subset(per_def_records, total_target, cfg.dark_dims)
     df = _expand_records(base_records)
     return df
 
@@ -456,6 +487,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             "u_scale": cfg.u_scale,
             "dwell": cfg.dwell,
             "seed": cfg.seed,
+            "dark_dims": list(cfg.dark_dims),
         },
         "records": int(len(df)),
     }

@@ -25,7 +25,7 @@ from ..ensembles import sample_system_instance
 from ..estimators import dmdc_pinv, dmdc_tls, moesp_fit, node_fit, sindy_fit
 from ..metrics import cont2discrete_zoh, pair_distance
 from ..simulation import simulate_dt
-from .sim_core_common import (
+from .simcor_common import (
     CoreExperimentConfig,
     compute_core_metrics,
     compute_identifiability_metrics,
@@ -106,7 +106,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> SimpleCoreConfig:
 
     parser.add_argument("--ens-size", type=int, default=24, dest="ens_size", help="Number of systems in the ensemble.")
     parser.add_argument("--x0-samples", type=int, default=8, dest="x0_samples", help="Initial states per system.")
-    parser.add_argument("--x0amp", type=float, default=1.0, help="Scale factor applied to unit-sphere initial states.")
+    parser.add_argument(
+        "--x0amp",
+        type=float,
+        default=1.0,
+        help="Uniform scaling factor applied to the unit-sphere initial states.",
+    )
     parser.add_argument("--noise-std", type=float, default=0.0, dest="noise_std", help="Process noise standard deviation.")
     parser.add_argument("--u-scale", type=float, default=3.0, dest="u_scale", help="PRBS amplitude.")
     parser.add_argument("--dwell", type=int, default=1, help="PRBS dwell time (samples per draw).")
@@ -254,7 +259,7 @@ def _run_stochastic(cfg: SimpleCoreConfig, rng: np.random.Generator) -> pd.DataF
         A, B = sample_system_instance(cfg, rng)
         Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
         for x_idx in range(cfg.x0_samples):
-            x0 = sample_unit_sphere(cfg.n, rng) * cfg.x0_amp
+            x0 = sample_unit_sphere(cfg.n, rng, radius=cfg.x0_amp)
             ident = compute_identifiability_metrics(Ad, Bd, x0)
             core = compute_core_metrics(A, B, x0)
 
