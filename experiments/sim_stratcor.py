@@ -25,10 +25,13 @@ from ..metrics import pair_distance
 from ..simulation import simulate_dt
 from .simcor_common import (
     CoreExperimentConfig,
+    available_ident_scores,
     compute_core_metrics,
     compute_identifiability_metrics,
+    ident_score_label,
     prbs_with_order,
     relative_errors,
+    sample_unit_sphere,
     target_pe_order,
 )
 from .visible_sampling import (
@@ -54,6 +57,7 @@ class StratifiedCoreConfig(CoreExperimentConfig):
     estimators: tuple[str, ...] = ("dmdc_pinv",)
     outdir: Path = Path("out_stratcore")
     dark_dims: tuple[int, ...] = ()
+    crit: str = "sigma_min"
 
     def __post_init__(self) -> None:  # type: ignore[override]
         super().__post_init__()
@@ -154,6 +158,14 @@ def _parse_args(argv: Sequence[str] | None = None) -> StratifiedCoreConfig:
     )
 
     parser.add_argument(
+        "--crit",
+        type=str,
+        default="sigma_min",
+        choices=sorted(available_ident_scores()),
+        help="Identifiability score to display on the x-axis.",
+    )
+
+    parser.add_argument(
         "--outdir",
         type=str,
         default="out_stratcore",
@@ -181,6 +193,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> StratifiedCoreConfig:
         estimators=tuple(args.estimators),
         dark_dims=tuple(args.dark_dims) if args.dark_dims is not None else (),
         outdir=Path(args.outdir),
+        crit=args.crit,
     )
     return cfg
 
@@ -269,22 +282,37 @@ def _scatter_plot(df: pd.DataFrame, cfg: StratifiedCoreConfig, outfile: Path) ->
     for ax in axes[n_plots:]:
         ax.axis("off")
 
+    x_label = ident_score_label(cfg.crit)
+
     for ax, name in zip(axes, estimators):
         sub = df[df["estimator"] == name]
         colors = sub["deficiency"].to_numpy()
-        sc = ax.scatter(sub["sigma_min"], sub["err_mean_rel"], c=colors, cmap="viridis", alpha=0.7, s=20)
+        sc = ax.scatter(
+            sub["crit_value"],
+            sub["err_mean_rel"],
+            c=colors,
+            cmap="viridis",
+            alpha=0.7,
+            s=20,
+        )
         ax.set_title(f"{name}")
-        ax.set_xlabel(r"identifiability σ_min")
+        ax.set_xlabel(x_label)
         ax.set_ylabel("mean relative error")
         ax.grid(True, linestyle="--", alpha=0.4)
     if n_plots:
-        fig.colorbar(sc, ax=axes[:n_plots], shrink=0.85, label="deficiency")
+        fig.colorbar(
+            sc,
+            ax=axes[:n_plots],
+            shrink=0.85,
+            label="deficiency",
+            pad=0.02,
+        )
 
     fig.suptitle(
         f"Identifiability vs error (stratified, ensemble={cfg.ensemble})",
         fontsize=12,
     )
-    fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+    fig.tight_layout(rect=[0, 0.03, 0.95, 0.95])
     fig.savefig(outfile, dpi=200)
     plt.close(fig)
 
@@ -296,7 +324,7 @@ def _compute_correlations(df: pd.DataFrame) -> pd.DataFrame:
             pearson = np.nan
             spearman = np.nan
         else:
-            x = sub["sigma_min"].to_numpy()
+            x = sub["crit_value"].to_numpy()
             y = sub["err_mean_rel"].to_numpy()
             if np.allclose(x.std(ddof=0), 0.0) or np.allclose(y.std(ddof=0), 0.0):
                 pearson = np.nan
@@ -434,7 +462,7 @@ def _run_stratified(cfg: StratifiedCoreConfig, rng: np.random.Generator) -> pd.D
                         "engine": "det",
                         "system_index": systems_built - 1,
                         "deficiency": deficiency,
-                        "dim_visible": ident["dim_visible"],
+                        "dim_visible": int(round(ident["dim_visible"])),
                         "sigma_min": ident["sigma_min"],
                         "eta0": ident["eta0"],
                         "pbh_struct": core["pbh_struct"],
@@ -442,6 +470,7 @@ def _run_stratified(cfg: StratifiedCoreConfig, rng: np.random.Generator) -> pd.D
                         "mu_min": core["mu_min"],
                         "pe_order": order_est,
                         "errors": err_map,
+                        "crit_value": ident[cfg.crit],
                     }
                 )
 
@@ -489,6 +518,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             "dwell": cfg.dwell,
             "seed": cfg.seed,
             "dark_dims": list(cfg.dark_dims),
+            "crit": cfg.crit,
         },
         "records": int(len(df)),
     }

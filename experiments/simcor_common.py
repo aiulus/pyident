@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Callable, Dict, Iterable, Tuple
 
 import numpy as np
 
@@ -61,26 +61,46 @@ def sample_unit_sphere(
         return sample_unit_sphere(n, rng, radius=radius)
     return radius * (v / nrm)
 
+def _sigma_min_identifiability(Ad: np.ndarray, Bd: np.ndarray, x0: np.ndarray) -> float:
+    """Minimal singular value of the unified generator."""
+
+    generator = unified_generator(Ad, Bd, x0, mode="unrestricted")
+    if not generator.size:
+        return 0.0
+    svals = np.linalg.svd(generator, compute_uv=False)
+    return float(svals[-1]) if svals.size else 0.0
+
+
+IDENTIFIABILITY_SCORES: Dict[str, Callable[[np.ndarray, np.ndarray, np.ndarray], float]] = {
+    "sigma_min": _sigma_min_identifiability,
+    "eta0": lambda Ad, Bd, x0: float(eta0(Ad, Bd, x0, rtol=1e-12)),
+    "dim_visible": lambda Ad, Bd, x0: build_visible_basis_dt(Ad, Bd, x0, tol=1e-10).shape[1],
+}
+
+IDENT_LABELS: Dict[str, str] = {
+    "sigma_min": r"identifiability $\sigma_{\min}$",
+    "eta0": r"identifiability $\eta_0$",
+    "dim_visible": r"visible dimension",
+}
+
+
+def available_ident_scores() -> Iterable[str]:
+    """Names of supported identifiability scores."""
+
+    return IDENTIFIABILITY_SCORES.keys()
+
+
+def ident_score_label(name: str) -> str:
+    """Human-readable label for an identifiability score."""
+
+    return IDENT_LABELS.get(name, name)
 
 def compute_identifiability_metrics(
     Ad: np.ndarray, Bd: np.ndarray, x0: np.ndarray
 ) -> Dict[str, float]:
-    """Discrete-time identifiability proxies used throughout the scripts."""
+    """Discrete-time identifiability proxies sourced from :mod:`pyident.metrics`."""
 
-    generator = unified_generator(Ad, Bd, x0, mode="unrestricted")
-    if generator.size:
-        svals = np.linalg.svd(generator, compute_uv=False)
-        sigma_min = float(svals[-1])
-    else:
-        sigma_min = 0.0
-    eta = float(eta0(Ad, Bd, x0, rtol=1e-12))
-    Vbasis = build_visible_basis_dt(Ad, Bd, x0, tol=1e-10)
-    dim_visible = int(Vbasis.shape[1])
-    return {
-        "sigma_min": sigma_min,
-        "eta0": eta,
-        "dim_visible": dim_visible,
-    }
+    return {name: metric(Ad, Bd, x0) for name, metric in IDENTIFIABILITY_SCORES.items()}
 
 
 def compute_core_metrics(A: np.ndarray, B: np.ndarray, x0: np.ndarray) -> Dict[str, float]:
@@ -154,6 +174,10 @@ def prbs_with_order(
 
 
 __all__ = [
+    "IDENTIFIABILITY_SCORES",
+    "IDENT_LABELS",
+    "available_ident_scores",
+    "ident_score_label",
     "CoreExperimentConfig",
     "compute_core_metrics",
     "compute_identifiability_metrics",

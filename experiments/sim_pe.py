@@ -49,6 +49,7 @@ class PEVisibleConfig(ExperimentConfig):
     """Configuration for the PE-order versus visible-subspace study."""
 
     n: int = 5
+    visible_dim: int = 3
     m: int = 2
     T: int = 200
     dt: float = 0.1
@@ -57,7 +58,7 @@ class PEVisibleConfig(ExperimentConfig):
     noise_std: float = 0.0
 
     pe_orders: Sequence[int] = tuple(range(1, 11))
-    trials_per_order: int = 25
+    ntrials: int = 25
     T_padding: int = 10
     T_min: int = 0
     max_system_attempts: int = 500
@@ -70,8 +71,8 @@ class PEVisibleConfig(ExperimentConfig):
 
     def __post_init__(self) -> None:  # type: ignore[override]
         super().__post_init__()
-        if self.trials_per_order < 1:
-            raise ValueError("trials_per_order must be positive.")
+        if self.ntrials < 1:
+            raise ValueError("ntrials must be positive.")
         if not self.pe_orders:
             raise ValueError("pe_orders cannot be empty.")
         if min(self.pe_orders) <= 0:
@@ -82,6 +83,8 @@ class PEVisibleConfig(ExperimentConfig):
             raise ValueError("T_padding must be non-negative.")
         if self.max_x0_attempts <= 0:
             raise ValueError("max_x0_attempts must be positive.")
+        if not 0 < self.visible_dim <= self.n:
+            raise ValueError("visible_dim must satisfy 0 < visible_dim <= n.")
 
 
 # ---------------------------------------------------------------------------
@@ -183,12 +186,14 @@ def _plot_standard_by_visibility(
     x_col: str = "pe_order_actual",
     xlabel: str | None = "Estimated block-PE order (Hankel)",
 ) -> None:
-    """Two panels: left k=3 (partial), right k=5 (full), standard-basis errors only."""
+    """Two panels: left k=--vdim (partial), right k=n (full), standard-basis errors only."""
     outfile.parent.mkdir(parents=True, exist_ok=True)
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharex=True, sharey=True)
-    panels = [("partial", 3, "k=3 (partial)"),
-              ("full",    5, "k=5 (full)")]
+    panels = [
+        ("partial", cfg.visible_dim, f"k = {cfg.visible_dim} (partial)"),
+        ("full", cfg.n, f"k = {cfg.n} (full)"),
+    ]
 
     for ax, (scenario, k, title) in zip(axes, panels):
         sub = df[df["scenario"] == scenario]
@@ -245,15 +250,22 @@ def _plot_summary(
         ax.set_xlabel(xlabel or x_col)
         ax.set_ylabel(label)
         ax.grid(True, alpha=0.3)
-        if ax is axes[0, 0]:
-            ax.axvline(3, color="k", linestyle=":", linewidth=1.0, label="dim V(x0)=3")
-            ax.axvline(5, color="k", linestyle="-.", linewidth=1.0, label="dim V(x0)=5")
-        else:
-            ax.axvline(3, color="k", linestyle=":", linewidth=1.0)
-            ax.axvline(5, color="k", linestyle="-.", linewidth=1.0)
+        line_specs = [
+            (cfg.visible_dim, ":", f"dim V(x0) = {cfg.visible_dim} (partial)"),
+            (cfg.n, "-.", f"dim V(x0) = {cfg.n} (full)")
+        ]
+
+        seen_positions: set[int] = set()
+        for pos, style, label_text in line_specs:
+            if pos in seen_positions:
+                # Avoid duplicate labels/lines when dimensions coincide.
+                continue
+            seen_positions.add(pos)
+            label = label_text if ax is axes[0, 0] else None
+            ax.axvline(pos, color="k", linestyle=style, linewidth=1.0, label=label)
 
     axes[0, 0].legend(title="Scenario")
-    fig.suptitle("Estimation error vs PE order (n=5): ambient vs visible blocks")
+    fig.suptitle(f"Estimation error vs PE order (n={cfg.n}): ambient vs visible blocks")
     fig.tight_layout(rect=(0, 0, 1, 0.96))
     fig.savefig(outfile, dpi=160)
     plt.close(fig)
@@ -318,9 +330,9 @@ def run_experiment(cfg: PEVisibleConfig) -> pd.DataFrame:
     # Draw systems for the partially visible and fully visible scenarios.
     partial = {}
     partial_keys = ("A", "B", "Ad", "Bd", "x0", "P")
-    values = _draw_system_with_visible_dim(cfg, target_dim=3, rng=sys_rng)
+    values = _draw_system_with_visible_dim(cfg, target_dim=cfg.visible_dim, rng=sys_rng)
     partial.update(dict(zip(partial_keys, values)))
-    partial["dim_visible"] = 3
+    partial["dim_visible"] = cfg.visible_dim
 
     full = {}
     values = _draw_system_with_visible_dim(cfg, target_dim=cfg.n, rng=sys_rng)
@@ -331,7 +343,7 @@ def run_experiment(cfg: PEVisibleConfig) -> pd.DataFrame:
     max_order = max(cfg.pe_orders)
 
     for order in cfg.pe_orders:
-        for trial in range(cfg.trials_per_order):
+        for trial in range(cfg.ntrials):
             U, pe_block = _make_prbs_with_order(order, cfg, input_rng)
             pe_moment = int(estimate_moment_pe_order(U, r_max=max_order, dt=cfg.dt))
             records.append(_run_trial("partial", U, order, pe_block, pe_moment, partial, cfg))
@@ -378,14 +390,23 @@ def run_experiment(cfg: PEVisibleConfig) -> pd.DataFrame:
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--trials-per-order", type=int, default=100)
+    parser.add_argument("--ntrials", type=int, default=100)
     parser.add_argument("--outdir", type=str, default="out_pe_vs_visible")
+    parser.add_argument("--n", type=int, default=5, help="State dimension for the system")
+    parser.add_argument(
+        "--vdim",
+        type=int,
+        default=3,
+        help="Target visible subspace dimension dim(V(x0)) for the partial scenario",
+    )
     args = parser.parse_args(argv)
 
     cfg = PEVisibleConfig(
         seed=args.seed,
-        trials_per_order=args.trials_per_order,
+        ntrials=args.ntrials,
         outdir=args.outdir,
+        n=args.n,
+        visible_dim=args.vdim,
     )
 
     df = run_experiment(cfg)

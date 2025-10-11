@@ -27,8 +27,10 @@ from ..metrics import cont2discrete_zoh, pair_distance
 from ..simulation import simulate_dt
 from .simcor_common import (
     CoreExperimentConfig,
+    available_ident_scores,
     compute_core_metrics,
     compute_identifiability_metrics,
+    ident_score_label,
     prbs_with_order,
     relative_errors,
     sample_unit_sphere,
@@ -47,6 +49,7 @@ class SimpleCoreConfig(CoreExperimentConfig):
 
     estimators: tuple[str, ...] = ("dmdc_pinv", "moesp")
     outdir: Path = Path("out_simpcore")
+    crit: str = "sigma_min"
 
     def __post_init__(self) -> None:  # type: ignore[override]
         super().__post_init__()
@@ -126,6 +129,14 @@ def _parse_args(argv: Sequence[str] | None = None) -> SimpleCoreConfig:
     )
 
     parser.add_argument(
+        "--crit",
+        type=str,
+        default="sigma_min",
+        choices=sorted(available_ident_scores()),
+        help="Identifiability score to display on the x-axis.",
+    )
+
+    parser.add_argument(
         "--outdir",
         type=str,
         default="out_simpcore",
@@ -152,6 +163,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> SimpleCoreConfig:
         dwell=args.dwell,
         estimators=tuple(args.estimators),
         outdir=Path(args.outdir),
+        crit=args.crit,
     )
     return cfg
 
@@ -185,22 +197,37 @@ def _scatter_plot(df: pd.DataFrame, cfg: SimpleCoreConfig, outfile: Path) -> Non
     for ax in axes[n_plots:]:
         ax.axis("off")
 
+    x_label = ident_score_label(cfg.crit)
+
     for ax, name in zip(axes, estimators):
         sub = df[df["estimator"] == name]
         colors = sub["deficiency"].to_numpy()
-        sc = ax.scatter(sub["sigma_min"], sub["err_mean_rel"], c=colors, cmap="viridis", alpha=0.7, s=20)
+        sc = ax.scatter(
+            sub["crit_value"],
+            sub["err_mean_rel"],
+            c=colors,
+            cmap="viridis",
+            alpha=0.7,
+            s=20,
+        )
         ax.set_title(f"{name}")
-        ax.set_xlabel(r"identifiability σ_min")
+        ax.set_xlabel(x_label)
         ax.set_ylabel("mean relative error")
         ax.grid(True, linestyle="--", alpha=0.4)
     if n_plots:
-        fig.colorbar(sc, ax=axes[:n_plots], shrink=0.85, label="deficiency")
+        fig.colorbar(
+            sc,
+            ax=axes[:n_plots],
+            shrink=0.85,
+            label="deficiency",
+            pad=0.02,
+        )
 
     fig.suptitle(
         f"Identifiability vs error (stochastic, ensemble={cfg.ensemble})",
         fontsize=12,
     )
-    fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+    fig.tight_layout(rect=[0, 0.03, 0.95, 0.95])
     fig.savefig(outfile, dpi=200)
     plt.close(fig)
 
@@ -212,7 +239,7 @@ def _compute_correlations(df: pd.DataFrame) -> pd.DataFrame:
             pearson = np.nan
             spearman = np.nan
         else:
-            x = sub["sigma_min"].to_numpy()
+            x = sub["crit_value"].to_numpy()
             y = sub["err_mean_rel"].to_numpy()
             if np.allclose(x.std(ddof=0), 0.0) or np.allclose(y.std(ddof=0), 0.0):
                 pearson = np.nan
@@ -274,6 +301,7 @@ def _run_stochastic(cfg: SimpleCoreConfig, rng: np.random.Generator) -> pd.DataF
 
                 rel = relative_errors(Ahat, Bhat, Ad, Bd)
                 err_pair = float(pair_distance(Ahat, Bhat, Ad, Bd))
+                dim_visible = int(round(ident["dim_visible"]))
 
                 records.append(
                     {
@@ -281,8 +309,8 @@ def _run_stochastic(cfg: SimpleCoreConfig, rng: np.random.Generator) -> pd.DataF
                         "estimator": name,
                         "system_index": sys_idx,
                         "x0_index": x_idx,
-                        "deficiency": int(cfg.n - ident["dim_visible"]),
-                        "dim_visible": ident["dim_visible"],
+                        "deficiency": int(cfg.n - dim_visible),
+                        "dim_visible": dim_visible,
                         "sigma_min": ident["sigma_min"],
                         "eta0": ident["eta0"],
                         "pbh_struct": core["pbh_struct"],
@@ -293,6 +321,7 @@ def _run_stochastic(cfg: SimpleCoreConfig, rng: np.random.Generator) -> pd.DataF
                         "err_mean_rel": rel["err_mean_rel"],
                         "err_pair": err_pair,
                         "pe_order": order_est,
+                        "crit_value": ident[cfg.crit],
                     }
                 )
 
@@ -335,6 +364,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             "u_scale": cfg.u_scale,
             "dwell": cfg.dwell,
             "seed": cfg.seed,
+            "crit": cfg.crit,
         },
         "records": int(len(df)),
     }
