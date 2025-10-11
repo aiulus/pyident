@@ -92,6 +92,25 @@ def estimate_pe_order(u: np.ndarray, s_max: int, tol: float = 1e-8) -> int:
     # kept for backward compatibility
     return estimate_pe_order_block(u, s_max=s_max, tol=tol)
 
+# --- add these helpers near the top (after imports) ---
+def _estimate_block_pe(U, s_max, tol=None):
+    # Prefer tolerant signature if available; otherwise fall back.
+    try:
+        if tol is not None:
+            return int(estimate_pe_order(U, s_max=s_max, tol=tol))
+    except TypeError:
+        pass
+    return int(estimate_pe_order(U, s_max=s_max))
+
+def _estimate_moment_pe(U, r_max, dt, tol=None):
+    try:
+        if tol is not None:
+            return int(estimate_moment_pe_order(U, r_max=r_max, dt=dt, tol=tol))
+    except TypeError:
+        pass
+    return int(estimate_moment_pe_order(U, r_max=r_max, dt=dt))
+
+
 
 # ------------------ Moment-PE ------------------------
 

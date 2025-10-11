@@ -18,8 +18,8 @@ from ..config import ExperimentConfig
 from ..ensembles import draw_with_ctrb_rank, controllability_rank
 from ..metrics import cont2discrete_zoh, pbh_margin_structured, unified_generator, krylov_smin_norm
 from ..simulation import simulate_dt, prbs
-from ..estimators import dmdc_tls
-from ..projectors import left_uncontrollable_subspace
+from ..estimators import moesp_fit
+from ..projectors import left_uncontrollable_subspace, projector_onto_complement
 
 
 # --- scoring helpers ---
@@ -32,14 +32,6 @@ def orth(A: np.ndarray) -> np.ndarray:
     tol = max(A.shape) * np.finfo(float).eps * (S[0] if S.size else 1.0)
     r = int((S > tol).sum())
     return U[:, :r]
-
-def projector_from_basis(W: np.ndarray) -> np.ndarray:
-    n = W.shape[0]
-    if W.shape[1] == 0:
-        return np.eye(n)
-    # assume W columns orthonormal
-    return np.eye(n) - W @ W.T
-
 
 def _log_pbh(A: np.ndarray, B: np.ndarray, x0: np.ndarray) -> float:
     m = float(pbh_margin_structured(A, B, x0))  # CT pair
@@ -85,7 +77,7 @@ def run_experiment_for_d(cfg: ExperimentConfig,
     Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
     W_all = left_uncontrollable_subspace(A, B)
     W_all = orth(W_all)
-    P_dark = projector_from_basis(W_all)   # projects onto ker(W^T) = visible subspace V
+    P_dark = projector_onto_complement(W_all)   # projects onto ker(W^T) = visible subspace V
 
 
     I = np.eye(A.shape[0])
@@ -98,7 +90,7 @@ def run_experiment_for_d(cfg: ExperimentConfig,
     def trial(x0: np.ndarray) -> float:
         X = simulate_dt(x0, Ad, Bd, U, noise_std=cfg.noise_std, rng=rng)
         X0, X1 = X[:, :-1], X[:, 1:]
-        Ahat, Bhat = dmdc_tls(X0, X1, U)
+        Ahat, Bhat = moesp_fit(X0, X1, U)
         nA = np.linalg.norm(Ad, 'fro') + EPS
         nB = np.linalg.norm(Bd, 'fro') + EPS
         errA = np.linalg.norm(Ahat - Ad, 'fro') / nA

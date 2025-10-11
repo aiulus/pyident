@@ -31,17 +31,16 @@ import numpy as np
 import pandas as pd
 
 from ..config import ExperimentConfig
-from ..ensembles import stable
 from ..estimators import dmdc_tls
-from ..metrics import cont2discrete_zoh, projected_errors, visible_subspace
+from ..metrics import projected_errors
 from ..signals import estimate_moment_pe_order, estimate_pe_order
 from ..simulation import prbs, simulate_dt
+from .visible_sampling import VisibleDrawConfig, draw_system_state_with_visible_dim
 
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-
 
 @dataclass
 class PEVisibleConfig(ExperimentConfig):
@@ -60,9 +59,11 @@ class PEVisibleConfig(ExperimentConfig):
     T_padding: int = 10
     T_min: int = 40
     max_system_attempts: int = 500
+    max_x0_attempts: int = 256
     visible_tol: float = 1e-8
     eps_norm: float = 1e-12
     outdir: str = "out_pe_vs_visible"
+    deterministic_x0: bool = False
 
     def __post_init__(self) -> None:  # type: ignore[override]
         super().__post_init__()
@@ -76,19 +77,13 @@ class PEVisibleConfig(ExperimentConfig):
             raise ValueError("T_min must be positive.")
         if self.T_padding < 0:
             raise ValueError("T_padding must be non-negative.")
+        if self.max_x0_attempts <= 0:
+            raise ValueError("max_x0_attempts must be positive.")
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _unit_vector(x: np.ndarray) -> np.ndarray:
-    norm = float(np.linalg.norm(x))
-    if norm <= 0.0:
-        raise ValueError("x0 cannot be the zero vector.")
-    return x / norm
-
 
 def _draw_system_with_visible_dim(
     cfg: PEVisibleConfig,
@@ -97,24 +92,26 @@ def _draw_system_with_visible_dim(
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Draw (A, B, Ad, Bd, x0, P) with dim span(P) == target_dim."""
 
-    for _ in range(cfg.max_system_attempts):
-        A, B = stable(cfg.n, cfg.m, rng)
-        x0 = _unit_vector(rng.standard_normal(cfg.n))
-        Ad, Bd = cont2discrete_zoh(A, B, cfg.dt)
-        P, dim = visible_subspace(Ad, Bd, x0, tol=cfg.visible_tol)
-        if dim == target_dim:
-            return A, B, Ad, Bd, x0, P
-    raise RuntimeError(
-        f"Unable to draw system with dim V(x0) == {target_dim} after {cfg.max_system_attempts} tries."
+    draw_cfg = VisibleDrawConfig(
+        n=cfg.n,
+        m=cfg.m,
+        dt=cfg.dt,
+        dim_visible=target_dim,
+        ensemble="stable",
+        max_system_attempts=cfg.max_system_attempts,
+        max_x0_attempts=cfg.max_x0_attempts,
+        tol=cfg.visible_tol,
+        deterministic_x0=cfg.deterministic_x0,
     )
+    return draw_system_state_with_visible_dim(draw_cfg, rng)
 
 
 def _horizon_for_order(order: int, cfg: PEVisibleConfig) -> int:
-    """Choose a trajectory length whose Hankel depth matches ``order``."""
-
-    # For block-Hankel H_r (m*r rows) to be valid we need at least 2r samples.
-    # Add padding to avoid degenerate one-column Hankel matrices.
-    return max(cfg.T_min, 2 * order + cfg.T_padding)
+    """Choose T so H_r can be full row rank but H_{r+1} cannot (in principle)."""
+    # Full row rank at depth r requires T >= m*r + r - 1
+    T_needed = cfg.m * order + order - 1
+    # Keep an optional lower bound if you really need it; default it to 0.
+    return max(cfg.T_min, T_needed)
 
 
 def _relative_norm(err: float, ref: float, eps: float) -> float:
@@ -133,33 +130,77 @@ def _aggregate_stat(
     q3 = grouped.quantile(0.75).to_numpy()
     return orders, med, q1, q3
 
-
-def _plot_summary(df: pd.DataFrame, cfg: PEVisibleConfig, outfile: pathlib.Path) -> None:
-    """Plot relative errors vs PE order for each scenario."""
-
+def _plot_standard_by_visibility(
+    df: pd.DataFrame,
+    cfg: PEVisibleConfig,
+    outfile: pathlib.Path,
+    x_col: str = "pe_order_actual",
+    xlabel: str | None = "Estimated block-PE order (Hankel)",
+) -> None:
+    """Two panels: left k=3 (partial), right k=5 (full), standard-basis errors only."""
     outfile.parent.mkdir(parents=True, exist_ok=True)
 
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharex=True, sharey=True)
+    panels = [("partial", 3, "k=3 (partial)"),
+              ("full",    5, "k=5 (full)")]
+
+    for ax, (scenario, k, title) in zip(axes, panels):
+        sub = df[df["scenario"] == scenario]
+        # A-error
+        orders_A, med_A, q1_A, q3_A = _aggregate_stat(sub.set_index(x_col)["errA_rel"])
+        ax.plot(orders_A, med_A, label="‖Â−A‖₍F₎ / ‖A‖₍F₎")
+        ax.fill_between(orders_A, q1_A, q3_A, alpha=0.20)
+
+        # B-error
+        orders_B, med_B, q1_B, q3_B = _aggregate_stat(sub.set_index(x_col)["errB_rel"])
+        ax.plot(orders_B, med_B, linestyle="--", label="‖ B̂−B ‖₍F₎ / ‖B‖₍F₎")
+        ax.fill_between(orders_B, q1_B, q3_B, alpha=0.20)
+
+        ax.set_title(title)
+        ax.grid(True, alpha=0.3)
+        ax.axvline(k, color="k", linestyle=":", linewidth=1.0)  # expected elbow at k
+        ax.set_xlabel(xlabel or x_col)
+
+    axes[0].set_ylabel("Relative error (Frobenius)")
+    axes[0].legend(title="Standard-basis errors")
+    fig.suptitle("Estimation error vs. PEness (standard basis)")
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.savefig(outfile, dpi=160)
+    plt.close(fig)
+
+
+def _plot_summary(
+    df: pd.DataFrame,
+    cfg: PEVisibleConfig,
+    outfile: pathlib.Path,
+    x_col: str = "pe_order_actual",
+    xlabel: str | None = None,
+) -> None:
+    """Plot relative errors vs a chosen PE-order column for each scenario."""
+    outfile.parent.mkdir(parents=True, exist_ok=True)
     fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharex=True)
-    metrics = [("errA_rel", "‖Â−A‖₍F₎ / ‖A‖₍F₎"), ("errA_V_rel", "Visible-projected error")]
+    metrics = [("errA_rel", "‖Â−A‖₍F₎ / ‖A‖₍F₎"),
+               ("errA_V_rel", "Visible-projected error")]
 
     for ax, (col, label) in zip(axes, metrics):
         for scenario, linestyle, color in [("partial", "-", "C0"), ("full", "--", "C1")]:
             sub = df[df["scenario"] == scenario]
-            grouped = sub.set_index("pe_order_actual")[col]
+            grouped = sub.set_index(x_col)[col]
             orders, med, q1, q3 = _aggregate_stat(grouped)
             ax.plot(orders, med, linestyle=linestyle, color=color, label=scenario)
             ax.fill_between(orders, q1, q3, color=color, alpha=0.2)
 
-        ax.set_xlabel("Estimated PE order")
+        ax.set_xlabel(xlabel or x_col)
         ax.set_ylabel(label)
         ax.grid(True, alpha=0.3)
-        ax.axvline(3, color="k", linestyle=":", linewidth=1.0, label="dim V(x0)=3" if ax is axes[0] else None)
-        ax.axvline(5, color="k", linestyle="-.", linewidth=1.0, label="dim V(x0)=5" if ax is axes[0] else None)
+        # Visual “ceilings”:
+        ax.axvline(3, color="k", linestyle=":", linewidth=1.0,
+                   label="dim V(x0)=3" if ax is axes[0] else None)
+        ax.axvline(5, color="k", linestyle="-.", linewidth=1.0,
+                   label="dim V(x0)=5" if ax is axes[0] else None)
 
     axes[0].legend(title="Scenario")
-    fig.suptitle(
-        "Estimation error vs PE order (n=5): visible dimension as ceiling"
-    )
+    fig.suptitle("Estimation error vs PE order (n=5): visible dimension as ceiling")
     fig.tight_layout(rect=(0, 0, 1, 0.96))
     fig.savefig(outfile, dpi=160)
     plt.close(fig)
@@ -249,7 +290,13 @@ def run_experiment(cfg: PEVisibleConfig) -> pd.DataFrame:
     outdir = pathlib.Path(cfg.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     df.to_csv(outdir / "pe_vs_visible.csv", index=False)
-    _plot_summary(df, cfg, outdir / "pe_vs_visible.png")
+
+    # Two-panel plot: left k=3 partial, right k=5 full, standard basis, x = used PEness
+    _plot_standard_by_visibility(
+        df, cfg, outdir / "pe_vs_visible_standard_basis_blockPE.png",
+        x_col="pe_order_actual",
+        xlabel="Estimated block-PE order (Hankel)"
+    )
 
     return df
 
@@ -262,7 +309,7 @@ def run_experiment(cfg: PEVisibleConfig) -> pd.DataFrame:
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--trials-per-order", type=int, default=25)
+    parser.add_argument("--trials-per-order", type=int, default=100)
     parser.add_argument("--outdir", type=str, default="out_pe_vs_visible")
     args = parser.parse_args(argv)
 

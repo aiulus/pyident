@@ -212,6 +212,83 @@ def _visibility_sweep_for_algo(
     fig1.savefig(out_dir / f"vis_sweep_{algo_name}_std_vs_V.png", dpi=150)
     plt.close(fig1)
 
+    # ---------- NEW (Figure 2): Axis-aligned A/B comparison (Standard vs V(x0)) ----------
+    from matplotlib.lines import Line2D
+
+    fig2, axes2 = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharex=True)
+
+    positions = np.arange(1, len(dims_sorted) + 1)
+    offset = 0.18
+    width = 0.32
+
+    # A: Standard vs V(x0) grouped
+    bpA_std = axes2[0].boxplot(
+        dataA_std,
+        positions=positions - offset,
+        widths=width,
+        whis=(5, 95),
+        showfliers=False,
+    )
+    bpA_vis = axes2[0].boxplot(
+        dataA_vis,
+        positions=positions + offset,
+        widths=width,
+        whis=(5, 95),
+        showfliers=False,
+    )
+    axes2[0].set_title("A — Standard vs V(x0) (axis-aligned)")
+    axes2[0].set_ylabel("Relative error")
+    axes2[0].grid(True, axis="y", linestyle="--", alpha=0.6)
+
+    # B: Standard vs V(x0) grouped
+    bpB_std = axes2[1].boxplot(
+        dataB_std,
+        positions=positions - offset,
+        widths=width,
+        whis=(5, 95),
+        showfliers=False,
+    )
+    bpB_vis = axes2[1].boxplot(
+        dataB_vis,
+        positions=positions + offset,
+        widths=width,
+        whis=(5, 95),
+        showfliers=False,
+    )
+    axes2[1].set_title("B — Standard vs V(x0) (axis-aligned)")
+    axes2[1].grid(True, axis="y", linestyle="--", alpha=0.6)
+
+    # Shared x-ticks
+    for ax in axes2:
+        ax.set_xlabel("dim $V(x_0)$")
+        ax.set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
+
+    # Compute global y-limits across all four series so A and B are strictly axis-aligned
+    _all_vals = []
+    for seq in (dataA_std, dataA_vis, dataB_std, dataB_vis):
+        for arr in seq:
+            if isinstance(arr, np.ndarray) and arr.size:
+                _all_vals.append(np.asarray(arr, float))
+    if _all_vals:
+        ymin = 0.0
+        ymax = float(np.max([np.nanmax(a) for a in _all_vals if a.size]))
+        pad = 0.05 * (ymax if ymax > 0 else 1.0)
+        for ax in axes2:
+            ax.set_ylim(ymin, ymax + pad)
+
+    # Legend (no custom colors/styles)
+    legend_handles = [
+        Line2D([0], [0], label="Standard basis"),
+        Line2D([0], [0], label="V(x0)-basis (visible)"),
+    ]
+    axes2[1].legend(handles=legend_handles, loc="upper right", frameon=False)
+
+    fig2.suptitle(f"{algo_name}: Axis-aligned Standard vs V(x0) errors", y=0.98)
+    fig2.tight_layout()
+    fig2.savefig(out_dir / f"vis_sweep_{algo_name}_std_vs_V_axis_aligned.png", dpi=150)
+    plt.close(fig2)
+
+
 
         # ---------- NEW: unified (A-B mean) errors: standard vs V(x0)-basis ----------
     fig3, axes3 = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharex=True)

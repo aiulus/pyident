@@ -113,14 +113,14 @@ def left_uncontrollable_subspace(A: np.ndarray, B: np.ndarray,
     Wk = _orth(Wk)
 
     for _ in range(max_iter):
-        Pk = projector_from_basis(Wk)      # Pk = I - Wk Wk^T  (projects onto (span Wk)^\perp)
+        Pk = projector_onto_complement(Wk)      # Pk = I - Wk Wk^T  (projects onto (span Wk)^\perp)
         N  = np.vstack([Pk @ A.T, B.T])    # enforce: Pk A^T w = 0 and B^T w = 0
         Wn = _svd_nullspace(N, tol=tol)
         Wn = _orth(Wn)
 
         # convergence: projector distance and/or dim stability
         if (Wn.shape[1] == Wk.shape[1] and
-            norm(projector_from_basis(Wn) - projector_from_basis(Wk), 2) <= (tol or 1e-10)):
+            norm(projector_onto_complement(Wn) - projector_onto_complement(Wk), 2) <= (tol or 1e-10)):
             return Wn
         Wk = Wn
     return Wk
@@ -150,7 +150,7 @@ def make_dark_projector(A: np.ndarray, B: np.ndarray, k_off: int = 1,
         return W_all, np.zeros((n, 0)), np.eye(n)
     W_off = choose_dark_subset(W_all, k=k_off, rng=rng)
     # columns of W_all are orthonormal; subset preserves orthonormality
-    P_dark = projector_from_basis(W_off)
+    P_dark = projector_onto_complement(W_off)
     return W_all, W_off, P_dark
 
 def build_projected_x0(A: np.ndarray, B: np.ndarray, x0_seed: np.ndarray,
