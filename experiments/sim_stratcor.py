@@ -225,6 +225,7 @@ def _stratified_subset(
 
     base = total_target // bins
     remainder = total_target % bins
+    selected: List[Dict[str, object]] = []
 
     for idx, deficiency in enumerate(deficiency_order):
         need = base + (1 if idx < remainder else 0)
