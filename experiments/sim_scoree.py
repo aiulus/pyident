@@ -7,7 +7,7 @@ Core logic preserved:
   - For each trial: x0 ~ Unif(S^{n-1}), PRBS input, simulate DT system, estimate (A,B).
   - Compute criteria: PBH-structured margin, σ_min(K) on unified generator, left-eig overlap.
   - X-axis transforms: 1/pbh, 1/σ_min(K), 1/mu_min.  Y: relative Frobenius error vs (Ad,Bd).
-  - Save trial-wise CSV, Spearman correlations, scatter plots.
+  - Save trial-wise CSV, Pearson correlations, scatter plots.
 
 New CLI:
   --ensemble {ginibre,stable,sparse,binary}  (default: ginibre)
@@ -20,7 +20,7 @@ import argparse, math, sys, os, pathlib
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from scipy.stats import spearmanr
+from scipy.stats import pearsonr
 
 # --- module path setup (robust to different runners) ---
 sys.path.append(str(pathlib.Path(__file__).resolve().parent))
@@ -234,7 +234,7 @@ def run_trials(*, n=6, m=2, T=100, dt=0.01, trials=200, noise_std=0.0, seed=123,
 # ------------------------------
 # Reporting
 # ------------------------------
-def spearman_table(df: pd.DataFrame, estimator_cols: list[str]) -> pd.DataFrame:
+def pearson_table(df: pd.DataFrame, estimator_cols: list[str]) -> pd.DataFrame:
     xcols = [
         ("x_inv_pbh", "1 / PBH metric"),
         ("x_inv_krylov_smin", "1 / σ_min(K)"),
@@ -247,11 +247,11 @@ def spearman_table(df: pd.DataFrame, estimator_cols: list[str]) -> pd.DataFrame:
             # drop NaNs for correlation
             mask = np.isfinite(df[x].to_numpy()) & np.isfinite(df[y].to_numpy())
             if np.sum(mask) < 3:
-                rho, p = np.nan, np.nan
+                r, p = np.nan, np.nan
             else:
-                rho, p = spearmanr(df.loc[mask, x], df.loc[mask, y])
-            rec[f"{y}_rho"] = str(float(rho)) if isinstance(rho, (int, float)) and np.isfinite(float(rho)) else "nan"
-            rec[f"{y}_p"]   = str(float(p))   if isinstance(p, (int, float)) and np.isfinite(float(p))   else "nan"
+                r, p = pearsonr(df.loc[mask, x], df.loc[mask, y])
+            rec[f"{y}_r"] = str(float(r)) if isinstance(r, (int, float)) and np.isfinite(float(r)) else "nan"
+            rec[f"{y}_p"] = str(float(p)) if isinstance(p, (int, float)) and np.isfinite(float(p)) else "nan"
         records.append(rec)
     return pd.DataFrame(records)
 
@@ -270,14 +270,14 @@ def scatter_plots(df: pd.DataFrame, ykey: str, outdir: pathlib.Path, tag: str):
         mask = np.isfinite(xvals) & np.isfinite(yvals)
         n_eff = int(mask.sum())
         if n_eff >= 3:
-            rho, p = spearmanr(xvals[mask], yvals[mask])
+            r, p = pearsonr(xvals[mask], yvals[mask])
         else:
-            rho, p = np.nan, np.nan
+            r, p = np.nan, np.nan
         # format safe strings for legend
-        rho_s = "nan" if not np.isfinite(np.asarray(rho)) else f"{float(rho):.3f}"
-        p_s   = "nan" if not np.isfinite(np.asarray(p)) else f"{float(p):.1e}"
+        r_s = "nan" if not np.isfinite(np.asarray(r)) else f"{float(r):.3f}"
+        p_s = "nan" if not np.isfinite(np.asarray(p)) else f"{float(p):.1e}"
         # plot full sample and attach correlation legend
-        ax.scatter(xvals, yvals, s=18, label=rf"Spearman $\rho$={rho_s}, p={p_s}, n={n_eff}")
+        ax.scatter(xvals, yvals, s=18, label=rf"Pearson $\rho$={r_s}, p={p_s}, n={n_eff}")
          
         ax.set_xlabel(xlabel)
         ax.set_ylabel(f"REE ({ykey.replace('err_', '')})")
@@ -324,11 +324,11 @@ def scatter_plots_zoom(df: pd.DataFrame, ykey: str, outdir: pathlib.Path, tag: s
         mask = np.isfinite(xvals) & np.isfinite(yvals)
         n_eff = int(mask.sum())
         if n_eff >= 3:
-            rho, p = spearmanr(xvals[mask], yvals[mask])
+            r, p = pearsonr(xvals[mask], yvals[mask])
         else:
-            rho, p = np.nan, np.nan
-        rho_s = "nan" if not np.isfinite(rho) else f"{rho:.3f}"
-        p_s   = "nan" if not np.isfinite(p)   else f"{p:.1e}"
+            r, p = np.nan, np.nan
+        r_s = "nan" if not np.isfinite(r) else f"{r:.3f}"
+        p_s = "nan" if not np.isfinite(p) else f"{p:.1e}"
 
         # Compute zoom limits
         lims = _compute_zoom_limits(xvals, yvals, q=q_zoom)
@@ -337,7 +337,7 @@ def scatter_plots_zoom(df: pd.DataFrame, ykey: str, outdir: pathlib.Path, tag: s
         xlo, xhi, ylo, yhi = lims
 
         fig, ax = plt.subplots(figsize=(5.2, 4.0))
-        ax.scatter(xvals, yvals, s=18, label=rf"Spearman $\rho$={rho_s}, p={p_s}, n={n_eff}")
+        ax.scatter(xvals, yvals, s=18, label=rf"Pearson $\rho$={r_s}, p={p_s}, n={n_eff}")
         ax.set_xlim(xlo, xhi)
         ax.set_ylim(ylo, yhi)
         ax.set_xlabel(xlabel)
@@ -400,8 +400,8 @@ def main():
 
     # Spearman table over chosen estimators
     ycols = [c for c in df.columns if c.startswith("err_")]
-    stab = spearman_table(df, ycols)
-    stab.to_csv(outdir / f"spearman_{tag}.csv", index=False)
+    stab = pearson_table(df, ycols)
+    stab.to_csv(outdir / f"pearson_{tag}.csv", index=False)
 
     # Plots for each estimator
     for y in ycols:
@@ -415,7 +415,7 @@ def main():
 
     print("Saved:")
     print("  ", outdir / f"results_{tag}.csv")
-    print("  ", outdir / f"spearman_{tag}.csv")
+    print("  ", outdir / f"pearson_{tag}.csv")
     print("  ", meta_path)
     print("  plots ->", plotdir)
 

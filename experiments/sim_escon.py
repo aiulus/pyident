@@ -200,6 +200,39 @@ def _visibility_sweep_for_algo(
 
     import matplotlib.pyplot as plt
 
+        # Helper to compute reasonable y-limits without distorting data
+    def _compute_ylim(*data_groups: Sequence[Sequence[np.ndarray]], pad_frac: float = 0.05) -> Tuple[float, float]:
+        """Return (ymin, ymax) capturing the provided boxplot data.
+
+        Parameters
+        ----------
+        *data_groups:
+            Sequences of sequences of arrays (e.g., per-dimension collections).
+        pad_frac:
+            Fractional padding added above the maximum data value.
+        """
+
+        collected: List[np.ndarray] = []
+        for group in data_groups:
+            for arr in group:
+                arr = np.asarray(arr, float)
+                if arr.size:
+                    finite_vals = arr[np.isfinite(arr)]
+                    if finite_vals.size:
+                        collected.append(finite_vals)
+
+        if not collected:
+            return 0.0, 1.0
+
+        max_val = max(float(np.max(vals)) for vals in collected)
+        if not np.isfinite(max_val):
+            max_val = 1.0
+        if max_val <= 0:
+            max_val = 1e-6
+        max_val = max(max_val, 1e-6)
+        pad = max(pad_frac * max_val, 1e-8)
+        return 0.0, max_val + pad
+
     # ---------- Figure 1: A/B — Standard vs V(x0)-basis (visible) ----------
 
     dims_sorted = list(sorted(dims, reverse=True))  # n..down..5
@@ -342,7 +375,139 @@ def _visibility_sweep_for_algo(
     fig3.tight_layout()
     fig3.savefig(out_dir / f"vis_sweep_{canonical_name}_unified.png", dpi=150)
     plt.close(fig3)
+    # ---------- NEW (3xfinal_1): Axis-aligned standard vs V(x0) errors ----------
+    fig_aligned, axes_aligned = plt.subplots(nrows=2, ncols=2, figsize=(12, 6), sharex=True)
 
+    # Left column: standard basis (A/B)
+    axes_aligned[0, 0].boxplot(dataA_std, whis=(5, 95), showfliers=False)
+    axes_aligned[0, 0].set_title("A — Standard basis")
+    axes_aligned[0, 0].set_ylabel("Relative error")
+    axes_aligned[0, 0].grid(True, axis="y", linestyle="--", alpha=0.6)
+
+    axes_aligned[1, 0].boxplot(dataB_std, whis=(5, 95), showfliers=False)
+    axes_aligned[1, 0].set_title("B — Standard basis")
+    axes_aligned[1, 0].set_xlabel("dim $V(x_0)$")
+    axes_aligned[1, 0].set_ylabel("Relative error")
+    axes_aligned[1, 0].grid(True, axis="y", linestyle="--", alpha=0.6)
+    axes_aligned[1, 0].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
+
+    # Right column: V(x0)-basis (A/B)
+    axes_aligned[0, 1].boxplot(dataA_vis, whis=(5, 95), showfliers=False)
+    axes_aligned[0, 1].set_title("A — V(x0)-basis")
+    axes_aligned[0, 1].grid(True, axis="y", linestyle="--", alpha=0.6)
+
+    axes_aligned[1, 1].boxplot(dataB_vis, whis=(5, 95), showfliers=False)
+    axes_aligned[1, 1].set_title("B — V(x0)-basis")
+    axes_aligned[1, 1].set_xlabel("dim $V(x_0)$")
+    axes_aligned[1, 1].grid(True, axis="y", linestyle="--", alpha=0.6)
+    axes_aligned[1, 1].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
+
+    ymin_std, ymax_std = _compute_ylim(dataA_std, dataB_std)
+    ymin_vis, ymax_vis = _compute_ylim(dataA_vis, dataB_vis)
+    ymin = min(ymin_std, ymin_vis)
+    ymax = max(ymax_std, ymax_vis)
+    for ax in axes_aligned.flat:
+        ax.set_ylim(ymin, ymax)
+
+    fig_aligned.suptitle(f"{canonical_name}: Axis-aligned estimation errors", y=0.98)
+    fig_aligned.tight_layout()
+    fig_aligned.savefig(out_dir / f"3xfinal_axis_aligned_standard_vs_V.png", dpi=150)
+    plt.close(fig_aligned)
+
+    # ---------- NEW (3xfinal_2): V(x0)-basis estimation errors ----------
+    fig_v_single, axes_v_single = plt.subplots(nrows=2, ncols=1, figsize=(6, 6), sharex=True)
+
+    axes_v_single[0].boxplot(dataA_vis, whis=(5, 95), showfliers=False)
+    axes_v_single[0].set_title("A — V(x0)-basis")
+    axes_v_single[0].set_ylabel("Relative error")
+    axes_v_single[0].grid(True, axis="y", linestyle="--", alpha=0.6)
+
+    axes_v_single[1].boxplot(dataB_vis, whis=(5, 95), showfliers=False)
+    axes_v_single[1].set_title("B — V(x0)-basis")
+    axes_v_single[1].set_xlabel("dim $V(x_0)$")
+    axes_v_single[1].set_ylabel("Relative error")
+    axes_v_single[1].grid(True, axis="y", linestyle="--", alpha=0.6)
+    axes_v_single[1].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
+
+    ymin_v, ymax_v = _compute_ylim(dataA_vis, dataB_vis)
+    for ax in axes_v_single:
+        ax.set_ylim(ymin_v, ymax_v)
+
+    fig_v_single.tight_layout()
+    fig_v_single.savefig(out_dir / f"3xfinal_V_basis_estimation_errors.png", dpi=150)
+    plt.close(fig_v_single)
+
+    # ---------- NEW (3xfinal_3): A-estimation error (axis-aligned) ----------
+    fig_A_axis, axes_A_axis = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharey=True)
+
+    axes_A_axis[0].boxplot(dataA_std, whis=(5, 95), showfliers=False)
+    axes_A_axis[0].set_title("A — Standard basis")
+    axes_A_axis[0].set_xlabel("dim $V(x_0)$")
+    axes_A_axis[0].set_ylabel("Relative error")
+    axes_A_axis[0].grid(True, axis="y", linestyle="--", alpha=0.6)
+    axes_A_axis[0].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
+
+    axes_A_axis[1].boxplot(dataA_vis, whis=(5, 95), showfliers=False)
+    axes_A_axis[1].set_title("A — V(x0)-basis")
+    axes_A_axis[1].set_xlabel("dim $V(x_0)$")
+    axes_A_axis[1].grid(True, axis="y", linestyle="--", alpha=0.6)
+    axes_A_axis[1].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
+
+    ymin_A, ymax_A = _compute_ylim(dataA_std, dataA_vis)
+    for ax in axes_A_axis:
+        ax.set_ylim(ymin_A, ymax_A)
+
+    fig_A_axis.tight_layout()
+    fig_A_axis.savefig(out_dir / f"3xfinal_A_axis_aligned.png", dpi=150)
+    plt.close(fig_A_axis)
+
+    # ---------- NEW (3xfinal_4): B-estimation error (axis-aligned) ----------
+    fig_B_axis, axes_B_axis = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharey=True)
+
+    axes_B_axis[0].boxplot(dataB_std, whis=(5, 95), showfliers=False)
+    axes_B_axis[0].set_title("B — Standard basis")
+    axes_B_axis[0].set_xlabel("dim $V(x_0)$")
+    axes_B_axis[0].set_ylabel("Relative error")
+    axes_B_axis[0].grid(True, axis="y", linestyle="--", alpha=0.6)
+    axes_B_axis[0].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
+
+    axes_B_axis[1].boxplot(dataB_vis, whis=(5, 95), showfliers=False)
+    axes_B_axis[1].set_title("B — V(x0)-basis")
+    axes_B_axis[1].set_xlabel("dim $V(x_0)$")
+    axes_B_axis[1].grid(True, axis="y", linestyle="--", alpha=0.6)
+    axes_B_axis[1].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
+
+    ymin_B, ymax_B = _compute_ylim(dataB_std, dataB_vis)
+    for ax in axes_B_axis:
+        ax.set_ylim(ymin_B, ymax_B)
+
+    fig_B_axis.tight_layout()
+    fig_B_axis.savefig(out_dir / f"3xfinal_B_axis_aligned.png", dpi=150)
+    plt.close(fig_B_axis)
+
+    # ---------- NEW (3xfinal_5): V(x0)-basis A/B side-by-side ----------
+    fig_v_side, axes_v_side = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharey=True)
+
+    axes_v_side[0].boxplot(dataA_vis, whis=(5, 95), showfliers=False)
+    axes_v_side[0].set_title("A — V(x0)-basis")
+    axes_v_side[0].set_xlabel("dim $V(x_0)$")
+    axes_v_side[0].set_ylabel("Relative error")
+    axes_v_side[0].grid(True, axis="y", linestyle="--", alpha=0.6)
+    axes_v_side[0].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
+
+    axes_v_side[1].boxplot(dataB_vis, whis=(5, 95), showfliers=False)
+    axes_v_side[1].set_title("B — V(x0)-basis")
+    axes_v_side[1].set_xlabel("dim $V(x_0)$")
+    axes_v_side[1].grid(True, axis="y", linestyle="--", alpha=0.6)
+    axes_v_side[1].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
+
+    ymin_v_side, ymax_v_side = _compute_ylim(dataA_vis, dataB_vis)
+    for ax in axes_v_side:
+        ax.set_ylim(ymin_v_side, ymax_v_side)
+
+    fig_v_side.tight_layout()
+    fig_v_side.savefig(out_dir / f"3xfinal_V_basis_A_B_side_by_side.png", dpi=150)
+    plt.close(fig_v_side)
 
 # ---------- NEW: wrapper to run the full sweep for several algorithms ----------
 def run_visibility_sweep_plots(
