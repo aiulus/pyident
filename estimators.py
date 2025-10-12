@@ -191,7 +191,7 @@ def sindy_fit(
     degree: int = 1,
     optimizer: Optional[object] = None,
     feature_library: Optional[object] = None,
-    verbose: bool = False,
+    verbose: bool = True,
     return_diagnostics: bool = False,
 ):
     """Fit a discrete-time SINDy model using PySINDy and log reconstruction error."""
