@@ -88,13 +88,13 @@ def _visibility_sweep_for_algo(
     ensemble_size: int = 200,
     dims: Optional[Sequence[int]] = None,
     out_dir: Optional[pathlib.Path] = None,
-    *,
-    single_mode: bool = False,
 ) -> None:
     """
-    For a chosen estimator, build ensembles over dimV = n..5, simulate, fit, and save two figures:
-      1) standard basis errors (A, B) as boxplots,
-      2) adapted-basis errors (visible/dark) as boxplots for A and B.
+    For a chosen estimator, build ensembles over dimV = n..5, simulate, fit, and save four figures:
+      1) Unified (A-B mean) errors in standard basis
+      2) Unified (A-B mean) errors in V(x0)-basis 
+      3) A-alone (top) and B-alone (bottom) errors in standard basis
+      4) A-alone in standard basis (top) and B-alone in V(x0) basis (bottom)
     """
     algos = _sweep_estimators()
     canonical_name = _resolve_algo_name(algo_name, algos)
@@ -221,105 +221,36 @@ def _visibility_sweep_for_algo(
     dataB_vis = [np.asarray(by_dim_visB[k], float) for k in dims_sorted]
 
     import matplotlib.pyplot as plt
+    from matplotlib.axes import Axes
     def _boxplot_with_zero_floor(
-        ax: plt.Axes,
+        ax: Axes,
         data: Sequence[np.ndarray],
         *,
-        zero_thresh: float = 1e-10,
         positions: Optional[Sequence[float]] = None,
         widths: Optional[Union[float, Sequence[float]]] = None,
         **kwargs,
     ):
-        """Draw a boxplot and replace near-zero series with a baseline bar.
-
-        Any series whose maximum finite value is below ``zero_thresh`` is rendered as a
-        thick horizontal bar at ``y = 0`` instead of a conventional box.  This keeps
-        the shared-axis figures readable when all errors are numerically zero.
+        """Draw a standard boxplot without any zero-threshold filtering.
+        
+        All data series are plotted as normal boxplots regardless of their magnitude.
         """
 
         # ``matplotlib`` expects list-like data. Ensure ``np.ndarray`` instances are
         # passed through unchanged while guarding against ``None``.
         cleaned: List[np.ndarray] = []
-        zero_flags: List[bool] = []
         for arr in data:
             if arr is None:
                 cleaned.append(np.asarray([np.nan]))
-                zero_flags.append(False)
                 continue
 
             arr = np.asarray(arr, dtype=float)
             finite_vals = arr[np.isfinite(arr)]
             if finite_vals.size == 0:
                 cleaned.append(np.asarray([np.nan]))
-                zero_flags.append(False)
                 continue
             cleaned.append(finite_vals)
-            zero_flags.append(float(np.max(finite_vals)) < zero_thresh)
 
-        bp = ax.boxplot(cleaned, positions=positions, widths=widths, **kwargs)
-
-        if not any(zero_flags):
-            return bp
-
-        if positions is None:
-            pos_arr = np.arange(1, len(cleaned) + 1, dtype=float)
-        else:
-            pos_arr = np.asarray(positions, dtype=float)
-
-        if widths is None:
-            width_arr = np.full(len(cleaned), 0.5, dtype=float)
-        elif np.isscalar(widths):
-            width_arr = np.full(len(cleaned), float(widths))
-        else:
-            width_arr = np.asarray(widths, dtype=float)
-
-        for idx, use_bar in enumerate(zero_flags):
-            if not use_bar:
-                continue
-
-            edge_color = None
-            if "boxes" in bp and len(bp["boxes"]) > idx:
-                box_artist = bp["boxes"][idx]
-                box_artist.set_visible(False)
-
-                if hasattr(box_artist, "get_edgecolor"):
-                    edge_color = box_artist.get_edgecolor()
-                elif hasattr(box_artist, "get_color"):
-                    edge_color = box_artist.get_color()
-                elif hasattr(box_artist, "get_facecolor"):
-                    edge_color = box_artist.get_facecolor()
-
-            if "medians" in bp:
-                bp["medians"][idx].set_visible(False)
-
-            if "whiskers" in bp:
-                bp["whiskers"][2 * idx].set_visible(False)
-                bp["whiskers"][2 * idx + 1].set_visible(False)
-
-            if "caps" in bp:
-                bp["caps"][2 * idx].set_visible(False)
-                bp["caps"][2 * idx + 1].set_visible(False)
-
-            if "fliers" in bp and bp["fliers"]:
-                bp["fliers"][idx].set_visible(False)
-
-            # ``edge_color`` may be an array of RGBA tuples. Normalise to a single
-            # colour usable by ``hlines``.
-            if isinstance(edge_color, (list, tuple, np.ndarray)):
-                edge_color = np.asarray(edge_color)
-                if edge_color.ndim > 1:
-                    edge_color = edge_color[0]
-                edge_color = tuple(edge_color)
-
-            if edge_color is None:
-                edge_color = "C0"
-
-            half_width = 0.5 * float(width_arr[idx])
-            x0 = pos_arr[idx] - half_width
-            x1 = pos_arr[idx] + half_width
-            ax.hlines(0.0, x0, x1, colors=edge_color, linewidth=3.0, zorder=5)
-
-        return bp
+        return ax.boxplot(cleaned, positions=positions, widths=widths, **kwargs)
     
     def _compute_ylim(
         *data_groups: Sequence[Sequence[np.ndarray]],
@@ -365,7 +296,17 @@ def _visibility_sweep_for_algo(
         uni_std: Sequence[np.ndarray],
         uni_vis: Sequence[np.ndarray],
     ) -> None:
-        """Render the single-mode figures for a given algorithm."""
+        """Render 9 single-mode figures for a given algorithm:
+        1. Unified (A-B mean) errors in standard basis
+        2. Unified (A-B mean) errors in V(x0)-basis  
+        3. A (top) and B (bottom) errors in standard basis
+        4. A (top) and B (bottom) errors in V(x0) basis
+        5. B-only errors in standard basis
+        6. B-only errors in V(x0) basis
+        7. A-only errors in standard basis  
+        8. A-only errors in V(x0) basis
+        9. A-B mean errors side-by-side (left: standard, right: V(x0))
+        """
 
         xticks = list(range(1, len(dims_desc) + 1))
         xticklabels = [str(k) for k in dims_desc]
@@ -416,339 +357,128 @@ def _visibility_sweep_for_algo(
         fig_std_AB.savefig(out_dir / f"single_{algorithm_name}_standard_AB.png", dpi=150)
         plt.close(fig_std_AB)
 
-        # Figure 4: A standard basis, B V(x0)-basis
-        fig_mixed_AB, axes_mixed_AB = plt.subplots(nrows=2, ncols=1, figsize=(8, 6), sharex=True)
-        _boxplot_with_zero_floor(axes_mixed_AB[0], A_std, whis=(5, 95), showfliers=False)
-        axes_mixed_AB[0].set_title("A — Standard basis")
-        axes_mixed_AB[0].set_ylabel("Relative error")
-        axes_mixed_AB[0].grid(True, axis="y", linestyle="--", alpha=0.6)
+        # Figure 4: A and B errors in V(x0) basis
+        fig_vis_AB, axes_vis_AB = plt.subplots(nrows=2, ncols=1, figsize=(8, 6), sharex=True)
+        _boxplot_with_zero_floor(axes_vis_AB[0], A_vis, whis=(5, 95), showfliers=False)
+        axes_vis_AB[0].set_title("A — V(x0)-basis")
+        axes_vis_AB[0].set_ylabel("Relative error")
+        axes_vis_AB[0].grid(True, axis="y", linestyle="--", alpha=0.6)
 
-        _boxplot_with_zero_floor(axes_mixed_AB[1], B_vis, whis=(5, 95), showfliers=False)
-        axes_mixed_AB[1].set_title("B — V(x0)-basis")
-        axes_mixed_AB[1].set_xlabel("dim $V(x_0)$")
-        axes_mixed_AB[1].set_ylabel("Relative error")
-        axes_mixed_AB[1].set_xticks(xticks, xticklabels)
-        axes_mixed_AB[1].grid(True, axis="y", linestyle="--", alpha=0.6)
+        _boxplot_with_zero_floor(axes_vis_AB[1], B_vis, whis=(5, 95), showfliers=False)
+        axes_vis_AB[1].set_title("B — V(x0)-basis")
+        axes_vis_AB[1].set_xlabel("dim $V(x_0)$")
+        axes_vis_AB[1].set_ylabel("Relative error")
+        axes_vis_AB[1].set_xticks(xticks, xticklabels)
+        axes_vis_AB[1].grid(True, axis="y", linestyle="--", alpha=0.6)
 
-        ymin_mixed, ymax_mixed = _compute_ylim(A_std, B_vis)
-        for ax in axes_mixed_AB:
-            ax.set_ylim(ymin_mixed, ymax_mixed)
+        ymin_vis, ymax_vis = _compute_ylim(A_vis, B_vis)
+        for ax in axes_vis_AB:
+            ax.set_ylim(ymin_vis, ymax_vis)
 
-        fig_mixed_AB.tight_layout()
-        fig_mixed_AB.savefig(out_dir / f"single_{algorithm_name}_Vx0basis_AB.png", dpi=150)
-        plt.close(fig_mixed_AB)
+        fig_vis_AB.tight_layout()
+        fig_vis_AB.savefig(out_dir / f"single_{algorithm_name}_Vx0basis_AB.png", dpi=150)
+        plt.close(fig_vis_AB)
 
-    if single_mode:
-        dims_desc = []
-        for dim in sorted(dict.fromkeys(dims), reverse=True):
-            if len(by_dim_stdA.get(dim, ())) == 0:
-                continue
-            dims_desc.append(dim)
+        # Figure 5: B-only errors in standard basis
+        fig_B_std, ax_B_std = plt.subplots(nrows=1, ncols=1, figsize=(8, 4))
+        _boxplot_with_zero_floor(ax_B_std, B_std, whis=(5, 95), showfliers=False)
+        ax_B_std.set_title(f"{algorithm_name}: B errors — Standard basis")
+        ax_B_std.set_xlabel("dim $V(x_0)$")
+        ax_B_std.set_ylabel("Relative error")
+        ax_B_std.set_xticks(xticks, xticklabels)
+        ax_B_std.grid(True, axis="y", linestyle="--", alpha=0.6)
+        fig_B_std.tight_layout()
+        fig_B_std.savefig(out_dir / f"single_{algorithm_name}_B_standard.png", dpi=150)
+        plt.close(fig_B_std)
 
-        if not dims_desc:
-            raise RuntimeError(
-                "No successful visibility-sweep trials were recorded; unable to plot results."
-            )
+        # Figure 6: B-only errors in V(x0) basis
+        fig_B_vis, ax_B_vis = plt.subplots(nrows=1, ncols=1, figsize=(8, 4))
+        _boxplot_with_zero_floor(ax_B_vis, B_vis, whis=(5, 95), showfliers=False)
+        ax_B_vis.set_title(f"{algorithm_name}: B errors — V(x0)-basis")
+        ax_B_vis.set_xlabel("dim $V(x_0)$")
+        ax_B_vis.set_ylabel("Relative error")
+        ax_B_vis.set_xticks(xticks, xticklabels)
+        ax_B_vis.grid(True, axis="y", linestyle="--", alpha=0.6)
+        fig_B_vis.tight_layout()
+        fig_B_vis.savefig(out_dir / f"single_{algorithm_name}_B_Vx0basis.png", dpi=150)
+        plt.close(fig_B_vis)
 
-        dataA_std_desc = [np.asarray(by_dim_stdA[k], float) for k in dims_desc]
-        dataB_std_desc = [np.asarray(by_dim_stdB[k], float) for k in dims_desc]
-        dataA_vis_desc = [np.asarray(by_dim_visA[k], float) for k in dims_desc]
-        dataB_vis_desc = [np.asarray(by_dim_visB[k], float) for k in dims_desc]
-        uni_std_data = [np.asarray(by_dim_unified_std[k], float) for k in dims_desc]
-        uni_vis_data = [np.asarray(by_dim_unified_vis[k], float) for k in dims_desc]
-        _render_single_mode_figures(
-            canonical_name,
-            dims_desc,
-            dataA_std_desc,
-            dataB_std_desc,
-            dataA_vis_desc,
-            dataB_vis_desc,
-            uni_std_data,
-            uni_vis_data,
-        )
-        return
-    
-    # ---------- Figure 1: A/B — Standard vs V(x0)-basis (visible) ----------
+        # Figure 7: A-only errors in standard basis
+        fig_A_std, ax_A_std = plt.subplots(nrows=1, ncols=1, figsize=(8, 4))
+        _boxplot_with_zero_floor(ax_A_std, A_std, whis=(5, 95), showfliers=False)
+        ax_A_std.set_title(f"{algorithm_name}: A errors — Standard basis")
+        ax_A_std.set_xlabel("dim $V(x_0)$")
+        ax_A_std.set_ylabel("Relative error")
+        ax_A_std.set_xticks(xticks, xticklabels)
+        ax_A_std.grid(True, axis="y", linestyle="--", alpha=0.6)
+        fig_A_std.tight_layout()
+        fig_A_std.savefig(out_dir / f"single_{algorithm_name}_A_standard.png", dpi=150)
+        plt.close(fig_A_std)
 
-    # Sort visible dimensions in descending order and discard any entries that
-    # ended up without data (e.g., if every trial for a given dimension failed).
-    dims_sorted = []
+        # Figure 8: A-only errors in V(x0) basis
+        fig_A_vis, ax_A_vis = plt.subplots(nrows=1, ncols=1, figsize=(8, 4))
+        _boxplot_with_zero_floor(ax_A_vis, A_vis, whis=(5, 95), showfliers=False)
+        ax_A_vis.set_title(f"{algorithm_name}: A errors — V(x0)-basis")
+        ax_A_vis.set_xlabel("dim $V(x_0)$")
+        ax_A_vis.set_ylabel("Relative error")
+        ax_A_vis.set_xticks(xticks, xticklabels)
+        ax_A_vis.grid(True, axis="y", linestyle="--", alpha=0.6)
+        fig_A_vis.tight_layout()
+        fig_A_vis.savefig(out_dir / f"single_{algorithm_name}_A_Vx0basis.png", dpi=150)
+        plt.close(fig_A_vis)
+
+        # Figure 9: A-B mean errors side-by-side (left: standard, right: V(x0))
+        fig_uni_side, axes_uni_side = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharey=True)
+        
+        # Left: Standard basis
+        _boxplot_with_zero_floor(axes_uni_side[0], uni_std, whis=(5, 95), showfliers=False)
+        axes_uni_side[0].set_title("Unified error (A-B mean) — Standard basis")
+        axes_uni_side[0].set_xlabel("dim $V(x_0)$")
+        axes_uni_side[0].set_ylabel("Relative error (A-B mean)")
+        axes_uni_side[0].set_xticks(xticks, xticklabels)
+        axes_uni_side[0].grid(True, axis="y", linestyle="--", alpha=0.6)
+        
+        # Right: V(x0) basis
+        _boxplot_with_zero_floor(axes_uni_side[1], uni_vis, whis=(5, 95), showfliers=False)
+        axes_uni_side[1].set_title("Unified error (A-B mean) — V(x0)-basis")
+        axes_uni_side[1].set_xlabel("dim $V(x_0)$")
+        axes_uni_side[1].set_xticks(xticks, xticklabels)
+        axes_uni_side[1].grid(True, axis="y", linestyle="--", alpha=0.6)
+        
+        fig_uni_side.suptitle(f"{algorithm_name}: Unified error comparison")
+        fig_uni_side.tight_layout()
+        fig_uni_side.savefig(out_dir / f"single_{algorithm_name}_unified_sidebyside.png", dpi=150)
+        plt.close(fig_uni_side)
+
+    # Generate the required single-mode figures
+    dims_desc = []
     for dim in sorted(dict.fromkeys(dims), reverse=True):
         if len(by_dim_stdA.get(dim, ())) == 0:
             continue
-        dims_sorted.append(dim)
+        dims_desc.append(dim)
 
-    if not dims_sorted:
+    if not dims_desc:
         raise RuntimeError(
             "No successful visibility-sweep trials were recorded; unable to plot results."
         )
-    fig1, axes1 = plt.subplots(nrows=2, ncols=2, figsize=(12, 6), sharex=True)
 
-    # A — standard basis (top-left)
- 
-    dataA_std = [np.asarray(by_dim_stdA[k], float) for k in dims_sorted]
-    _boxplot_with_zero_floor(axes1[0, 0], dataA_std, whis=(5, 95), showfliers=False)
-    axes1[0, 0].set_title("A — Standard basis")
-    axes1[0, 0].set_ylabel("Relative error")
-    axes1[0, 0].grid(True, axis="y", linestyle="--", alpha=0.6)
-
-    # B — standard basis (bottom-left)
-    dataB_std = [np.asarray(by_dim_stdB[k], float) for k in dims_sorted]
-    _boxplot_with_zero_floor(axes1[1, 0], dataB_std, whis=(5, 95), showfliers=False)
-    axes1[1, 0].set_title("B — Standard basis")
-    axes1[1, 0].set_xlabel("dim $V(x_0)$")
-    axes1[1, 0].set_ylabel("Relative error")
-    axes1[1, 0].grid(True, axis="y", linestyle="--", alpha=0.6)
-    axes1[1, 0].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
-
-    # A — V(x0)-basis (visible block) (top-right)
-    dataA_vis = [np.asarray(by_dim_visA[k], float) for k in dims_sorted]
-    _boxplot_with_zero_floor(axes1[0, 1], dataA_vis, whis=(5, 95), showfliers=False)
-    axes1[0, 1].set_title("A — V(x0)-basis (visible)")
-    axes1[0, 1].grid(True, axis="y", linestyle="--", alpha=0.6)
-
-    # B — V(x0)-basis (visible block) (bottom-right)
-    dataB_vis = [np.asarray(by_dim_visB[k], float) for k in dims_sorted]
-    _boxplot_with_zero_floor(axes1[1, 1], dataB_vis, whis=(5, 95), showfliers=False)
-    axes1[1, 1].set_title("B — V(x0)-basis (visible)")
-    axes1[1, 1].set_xlabel("dim $V(x_0)$")
-    axes1[1, 1].grid(True, axis="y", linestyle="--", alpha=0.6)
-    axes1[1, 1].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
-
-    fig1.suptitle(f"{canonical_name}: Standard vs V(x0)-basis errors", y=0.98)
-    fig1.tight_layout()
-    fig1.savefig(out_dir / f"vis_sweep_{canonical_name}_std_vs_V.png", dpi=150)
-    plt.close(fig1)
-
-    # ---------- NEW (Figure 2): Axis-aligned A/B comparison (Standard vs V(x0)) ----------
-    from matplotlib.lines import Line2D
-
-    fig2, axes2 = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharex=True)
-
-    positions = np.arange(1, len(dims_sorted) + 1)
-    positions = np.arange(1, len(dims_sorted) + 1, dtype=float)
-    offset = 0.18
-    width = 0.32
-
-    # A: Standard vs V(x0) grouped
-    _boxplot_with_zero_floor(
-        axes2[0],
-        dataA_std,
-        positions=positions - offset,
-        widths=width,
-        whis=(5, 95),
-        showfliers=False,
+    dataA_std_desc = [np.asarray(by_dim_stdA[k], float) for k in dims_desc]
+    dataB_std_desc = [np.asarray(by_dim_stdB[k], float) for k in dims_desc]
+    dataA_vis_desc = [np.asarray(by_dim_visA[k], float) for k in dims_desc]
+    dataB_vis_desc = [np.asarray(by_dim_visB[k], float) for k in dims_desc]
+    uni_std_data = [np.asarray(by_dim_unified_std[k], float) for k in dims_desc]
+    uni_vis_data = [np.asarray(by_dim_unified_vis[k], float) for k in dims_desc]
+    _render_single_mode_figures(
+        canonical_name,
+        dims_desc,
+        dataA_std_desc,
+        dataB_std_desc,
+        dataA_vis_desc,
+        dataB_vis_desc,
+        uni_std_data,
+        uni_vis_data,
     )
-    _boxplot_with_zero_floor(
-        axes2[0],
-        dataA_vis,
-        positions=positions + offset,
-        widths=width,
-        whis=(5, 95),
-        showfliers=False,
-    )
-    axes2[0].set_title("A — Standard vs V(x0) (axis-aligned)")
-    axes2[0].set_ylabel("Relative error")
-    axes2[0].grid(True, axis="y", linestyle="--", alpha=0.6)
 
-    # B: Standard vs V(x0) grouped
-    _boxplot_with_zero_floor(
-        axes2[1],
-        dataB_std,
-        positions=positions - offset,
-        widths=width,
-        whis=(5, 95),
-        showfliers=False,
-    )
-    _boxplot_with_zero_floor(
-        axes2[1],
-        dataB_vis,
-        positions=positions + offset,
-        widths=width,
-        whis=(5, 95),
-        showfliers=False,
-    )
-    axes2[1].set_title("B — Standard vs V(x0) (axis-aligned)")
-    axes2[1].grid(True, axis="y", linestyle="--", alpha=0.6)
-
-    # Shared x-ticks
-    for ax in axes2:
-        ax.set_xlabel("dim $V(x_0)$")
-        ax.set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
-
-    ymin_axis, ymax_axis = _compute_ylim(dataA_std, dataA_vis, dataB_std, dataB_vis)
-    for ax in axes2:
-        ax.set_ylim(ymin_axis, ymax_axis)
-
-    # Legend (no custom colors/styles)
-    legend_handles = [
-        Line2D([0], [0], label="Standard basis"),
-        Line2D([0], [0], label="V(x0)-basis (visible)"),
-    ]
-    axes2[1].legend(handles=legend_handles, loc="upper right", frameon=False)
-
-    fig2.suptitle(f"{canonical_name}: Axis-aligned Standard vs V(x0) errors", y=0.98)
-    fig2.tight_layout()
-    fig2.savefig(out_dir / f"vis_sweep_{canonical_name}_std_vs_V_axis_aligned.png", dpi=150)
-    plt.close(fig2)
-
-    # ---------- NEW: unified (A-B mean) errors: standard vs V(x0)-basis ----------
-    fig3, axes3 = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharex=True)
-
-    # Left: standard basis unified
-    uni_std_data = [np.asarray(by_dim_unified_std[k], float) for k in dims_sorted]
-    _boxplot_with_zero_floor(axes3[0], uni_std_data, whis=(5, 95), showfliers=False)
-    axes3[0].set_title(f"{canonical_name}: Unified error (A-B mean) — Standard basis")
-    axes3[0].set_ylabel("Relative error (A-B mean)")
-    axes3[0].grid(True, axis="y", linestyle="--", alpha=0.6)
-
-    # Right: V(x0)-basis unified (visible block)
-    uni_vis_data = [np.asarray(by_dim_unified_vis[k], float) for k in dims_sorted]
-    _boxplot_with_zero_floor(axes3[1], uni_vis_data, whis=(5, 95), showfliers=False)
-    axes3[1].set_title(f"{canonical_name}: Unified error (A-B mean) — V(x0)-basis")
-    axes3[1].grid(True, axis="y", linestyle="--", alpha=0.6)
-
-    # Shared x-ticks
-    for ax in axes3:
-        ax.set_xlabel("dim $V(x_0)$")
-        ax.set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
-
-    fig3.tight_layout()
-    fig3.savefig(out_dir / f"vis_sweep_{canonical_name}_unified.png", dpi=150)
-    plt.close(fig3)
-    # ---------- NEW (3xfinal_1): Axis-aligned standard vs V(x0) errors ----------
-    fig_aligned, axes_aligned = plt.subplots(nrows=2, ncols=2, figsize=(12, 6), sharex=True)
-
-    # Left column: standard basis (A/B)
-    _boxplot_with_zero_floor(axes_aligned[0, 0], dataA_std, whis=(5, 95), showfliers=False)
-    axes_aligned[0, 0].set_title("A — Standard basis")
-    axes_aligned[0, 0].set_ylabel("Relative error")
-    axes_aligned[0, 0].grid(True, axis="y", linestyle="--", alpha=0.6)
-
-    axes_aligned[1, 0].boxplot(dataB_std, whis=(5, 95), showfliers=False)
-    _boxplot_with_zero_floor(axes_aligned[1, 0], dataB_std, whis=(5, 95), showfliers=False)
-    axes_aligned[1, 0].set_xlabel("dim $V(x_0)$")
-    axes_aligned[1, 0].set_ylabel("Relative error")
-    axes_aligned[1, 0].grid(True, axis="y", linestyle="--", alpha=0.6)
-    axes_aligned[1, 0].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
-
-    # Right column: V(x0)-basis (A/B)
-    _boxplot_with_zero_floor(axes_aligned[0, 1], dataA_vis, whis=(5, 95), showfliers=False)
-    axes_aligned[0, 1].set_title("A — V(x0)-basis")
-    axes_aligned[0, 1].grid(True, axis="y", linestyle="--", alpha=0.6)
-
-    axes_aligned[1, 1].boxplot(dataB_vis, whis=(5, 95), showfliers=False)
-    _boxplot_with_zero_floor(axes_aligned[1, 1], dataB_vis, whis=(5, 95), showfliers=False)
-    axes_aligned[1, 1].set_xlabel("dim $V(x_0)$")
-    axes_aligned[1, 1].grid(True, axis="y", linestyle="--", alpha=0.6)
-    axes_aligned[1, 1].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
-
-    ymin_std, ymax_std = _compute_ylim(dataA_std, dataB_std)
-    ymin_vis, ymax_vis = _compute_ylim(dataA_vis, dataB_vis)
-    ymin = min(ymin_std, ymin_vis)
-    ymax = max(ymax_std, ymax_vis)
-    for ax in axes_aligned.flat:
-        ax.set_ylim(ymin, ymax)
-
-    fig_aligned.suptitle(f"{canonical_name}: Axis-aligned estimation errors", y=0.98)
-    fig_aligned.tight_layout()
-    fig_aligned.savefig(out_dir / f"3xfinal_axis_aligned_standard_vs_V.png", dpi=150)
-    plt.close(fig_aligned)
-
-    # ---------- NEW (3xfinal_2): V(x0)-basis estimation errors ----------
-    fig_v_single, axes_v_single = plt.subplots(nrows=2, ncols=1, figsize=(6, 6), sharex=True)
-
-    _boxplot_with_zero_floor(axes_v_single[0], dataA_vis, whis=(5, 95), showfliers=False)
-    axes_v_single[0].set_title("A — V(x0)-basis")
-    axes_v_single[0].set_ylabel("Relative error")
-    axes_v_single[0].grid(True, axis="y", linestyle="--", alpha=0.6)
-
-    _boxplot_with_zero_floor(axes_v_single[1], dataB_vis, whis=(5, 95), showfliers=False)
-    axes_v_single[1].set_title("B — V(x0)-basis")
-    axes_v_single[1].set_xlabel("dim $V(x_0)$")
-    axes_v_single[1].set_ylabel("Relative error")
-    axes_v_single[1].grid(True, axis="y", linestyle="--", alpha=0.6)
-    axes_v_single[1].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
-
-    ymin_v, ymax_v = _compute_ylim(dataA_vis, dataB_vis)
-    for ax in axes_v_single:
-        ax.set_ylim(ymin_v, ymax_v)
-
-    fig_v_single.tight_layout()
-    fig_v_single.savefig(out_dir / f"3xfinal_V_basis_estimation_errors.png", dpi=150)
-    plt.close(fig_v_single)
-
-    # ---------- NEW (3xfinal_3): A-estimation error (axis-aligned) ----------
-    fig_A_axis, axes_A_axis = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharey=True)
-
-    _boxplot_with_zero_floor(axes_A_axis[0], dataA_std, whis=(5, 95), showfliers=False)
-    axes_A_axis[0].set_title("A — Standard basis")
-    axes_A_axis[0].set_xlabel("dim $V(x_0)$")
-    axes_A_axis[0].set_ylabel("Relative error")
-    axes_A_axis[0].grid(True, axis="y", linestyle="--", alpha=0.6)
-    axes_A_axis[0].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
-
-    _boxplot_with_zero_floor(axes_A_axis[1], dataA_vis, whis=(5, 95), showfliers=False)
-    axes_A_axis[1].set_title("A — V(x0)-basis")
-    axes_A_axis[1].set_xlabel("dim $V(x_0)$")
-    axes_A_axis[1].grid(True, axis="y", linestyle="--", alpha=0.6)
-    axes_A_axis[1].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
-
-    ymin_A, ymax_A = _compute_ylim(dataA_std, dataA_vis)
-    for ax in axes_A_axis:
-        ax.set_ylim(ymin_A, ymax_A)
-
-    fig_A_axis.tight_layout()
-    fig_A_axis.savefig(out_dir / f"3xfinal_A_axis_aligned.png", dpi=150)
-    plt.close(fig_A_axis)
-
-    # ---------- NEW (3xfinal_4): B-estimation error (axis-aligned) ----------
-    fig_B_axis, axes_B_axis = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharey=True)
-
-    _boxplot_with_zero_floor(axes_B_axis[0], dataB_std, whis=(5, 95), showfliers=False)
-    axes_B_axis[0].set_title("B — Standard basis")
-    axes_B_axis[0].set_xlabel("dim $V(x_0)$")
-    axes_B_axis[0].set_ylabel("Relative error")
-    axes_B_axis[0].grid(True, axis="y", linestyle="--", alpha=0.6)
-    axes_B_axis[0].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
-
-    _boxplot_with_zero_floor(axes_B_axis[1], dataB_vis, whis=(5, 95), showfliers=False)
-    axes_B_axis[1].set_title("B — V(x0)-basis")
-    axes_B_axis[1].set_xlabel("dim $V(x_0)$")
-    axes_B_axis[1].grid(True, axis="y", linestyle="--", alpha=0.6)
-    axes_B_axis[1].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
-
-    ymin_B, ymax_B = _compute_ylim(dataB_std, dataB_vis)
-    for ax in axes_B_axis:
-        ax.set_ylim(ymin_B, ymax_B)
-
-    fig_B_axis.tight_layout()
-    fig_B_axis.savefig(out_dir / f"3xfinal_B_axis_aligned.png", dpi=150)
-    plt.close(fig_B_axis)
-
-    # ---------- NEW (3xfinal_5): V(x0)-basis A/B side-by-side ----------
-    fig_v_side, axes_v_side = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharey=True)
-
-    _boxplot_with_zero_floor(axes_v_side[0], dataA_vis, whis=(5, 95), showfliers=False)
-    axes_v_side[0].set_title("A — V(x0)-basis")
-    axes_v_side[0].set_xlabel("dim $V(x_0)$")
-    axes_v_side[0].set_ylabel("Relative error")
-    axes_v_side[0].grid(True, axis="y", linestyle="--", alpha=0.6)
-    axes_v_side[0].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
-
-    _boxplot_with_zero_floor(axes_v_side[1], dataB_vis, whis=(5, 95), showfliers=False)
-    axes_v_side[1].set_title("B — V(x0)-basis")
-    axes_v_side[1].set_xlabel("dim $V(x_0)$")
-    axes_v_side[1].grid(True, axis="y", linestyle="--", alpha=0.6)
-    axes_v_side[1].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
-
-    ymin_v_side, ymax_v_side = _compute_ylim(dataA_vis, dataB_vis)
-    for ax in axes_v_side:
-        ax.set_ylim(ymin_v_side, ymax_v_side)
-
-    fig_v_side.tight_layout()
-    fig_v_side.savefig(out_dir / f"3xfinal_V_basis_A_B_side_by_side.png", dpi=150)
-    plt.close(fig_v_side)
 
 # ---------- NEW: wrapper to run the full sweep for several algorithms ----------
 def run_visibility_sweep_plots(
@@ -756,8 +486,6 @@ def run_visibility_sweep_plots(
     algos: Optional[Sequence[str]] = None,
     ensemble_size: int = 200,
     out_dir: Optional[pathlib.Path] = None,
-    *,
-    single_mode: bool = False,
 ) -> None:
     if cfg is None:
         cfg = EstimatorConsistencyConfig()
@@ -793,7 +521,6 @@ def run_visibility_sweep_plots(
             ensemble_size=ensemble_size,
             dims=None,
             out_dir=out_dir,
-            single_mode=single_mode,
         )
 
 
@@ -1307,15 +1034,11 @@ def main() -> None:
         action="store_true",
         help="Use deterministic Krylov-based x0 construction (target dim V(x0)).",
     )
-    ap.add_argument(
-        "--vis",
-        action="store_true",
-        help="Run visibility-dimension sweep and save figures per algorithm.",
-    )
+
     ap.add_argument(
         "--single",
         action="store_true",
-        help="Run visibility sweep with the single-figure layout.",
+        help="Run visibility sweep and generate 4 figures per algorithm: unified errors (standard/V(x0)-basis) and A/B errors (standard basis and mixed).",
     )
     ap.add_argument(
         "--vis-ntrials",
@@ -1341,15 +1064,7 @@ def main() -> None:
     cfg.det = bool(args.det)
 
     argv_tokens = sys.argv[1:]
-    vis_requested = args.vis or args.single or any(
-        token.startswith("--vis-outdir")
-        or token.startswith("--vis-ntrials")
-        or token.startswith("--algos")
-        or token.startswith("--single")
-        for token in argv_tokens
-    )
-
-    if vis_requested:
+    if args.single:
         out_dir = pathlib.Path(args.vis_outdir) if args.vis_outdir else None
         algo_spec = args.algos or "SINDy,MOESP,DMDc,NODE"
         algos = []
@@ -1363,7 +1078,6 @@ def main() -> None:
             algos=algos,
             ensemble_size=int(args.vis_ntrials),
             out_dir=out_dir,
-            single_mode=bool(args.single),
         )
     else:
         # default behavior: run the original experiment
