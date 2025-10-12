@@ -88,6 +88,8 @@ def _visibility_sweep_for_algo(
     ensemble_size: int = 200,
     dims: Optional[Sequence[int]] = None,
     out_dir: Optional[pathlib.Path] = None,
+    *,
+    single_mode: bool = False,
 ) -> None:
     """
     For a chosen estimator, build ensembles over dimV = n..5, simulate, fit, and save two figures:
@@ -352,6 +354,120 @@ def _visibility_sweep_for_algo(
             max_val = 1e-6
         pad = max(pad_frac * max_val, 1e-8)
         return 0.0, max_val + pad
+    
+    def _render_single_mode_figures(
+        algorithm_name: str,
+        dims_desc: Sequence[int],
+        A_std: Sequence[np.ndarray],
+        B_std: Sequence[np.ndarray],
+        A_vis: Sequence[np.ndarray],
+        B_vis: Sequence[np.ndarray],
+        uni_std: Sequence[np.ndarray],
+        uni_vis: Sequence[np.ndarray],
+    ) -> None:
+        """Render the single-mode figures for a given algorithm."""
+
+        xticks = list(range(1, len(dims_desc) + 1))
+        xticklabels = [str(k) for k in dims_desc]
+
+        # Figure 1: unified errors (standard basis)
+        fig_uni_std, ax_uni_std = plt.subplots(nrows=1, ncols=1, figsize=(8, 4))
+        _boxplot_with_zero_floor(ax_uni_std, uni_std, whis=(5, 95), showfliers=False)
+        ax_uni_std.set_title(f"{algorithm_name}: Unified error (A-B mean) — Standard basis")
+        ax_uni_std.set_xlabel("dim $V(x_0)$")
+        ax_uni_std.set_ylabel("Relative error (A-B mean)")
+        ax_uni_std.set_xticks(xticks, xticklabels)
+        ax_uni_std.grid(True, axis="y", linestyle="--", alpha=0.6)
+        fig_uni_std.tight_layout()
+        fig_uni_std.savefig(out_dir / f"single_{algorithm_name}_standard.png", dpi=150)
+        plt.close(fig_uni_std)
+
+        # Figure 2: unified errors (V(x0)-basis)
+        fig_uni_vis, ax_uni_vis = plt.subplots(nrows=1, ncols=1, figsize=(8, 4))
+        _boxplot_with_zero_floor(ax_uni_vis, uni_vis, whis=(5, 95), showfliers=False)
+        ax_uni_vis.set_title(f"{algorithm_name}: Unified error (A-B mean) — V(x0)-basis")
+        ax_uni_vis.set_xlabel("dim $V(x_0)$")
+        ax_uni_vis.set_ylabel("Relative error (A-B mean)")
+        ax_uni_vis.set_xticks(xticks, xticklabels)
+        ax_uni_vis.grid(True, axis="y", linestyle="--", alpha=0.6)
+        fig_uni_vis.tight_layout()
+        fig_uni_vis.savefig(out_dir / f"single_{algorithm_name}_Vx0basis.png", dpi=150)
+        plt.close(fig_uni_vis)
+
+        # Figure 3: A and B errors in standard basis
+        fig_std_AB, axes_std_AB = plt.subplots(nrows=2, ncols=1, figsize=(8, 6), sharex=True)
+        _boxplot_with_zero_floor(axes_std_AB[0], A_std, whis=(5, 95), showfliers=False)
+        axes_std_AB[0].set_title("A — Standard basis")
+        axes_std_AB[0].set_ylabel("Relative error")
+        axes_std_AB[0].grid(True, axis="y", linestyle="--", alpha=0.6)
+
+        _boxplot_with_zero_floor(axes_std_AB[1], B_std, whis=(5, 95), showfliers=False)
+        axes_std_AB[1].set_title("B — Standard basis")
+        axes_std_AB[1].set_xlabel("dim $V(x_0)$")
+        axes_std_AB[1].set_ylabel("Relative error")
+        axes_std_AB[1].set_xticks(xticks, xticklabels)
+        axes_std_AB[1].grid(True, axis="y", linestyle="--", alpha=0.6)
+
+        ymin_std, ymax_std = _compute_ylim(A_std, B_std)
+        for ax in axes_std_AB:
+            ax.set_ylim(ymin_std, ymax_std)
+
+        fig_std_AB.tight_layout()
+        fig_std_AB.savefig(out_dir / f"single_{algorithm_name}_standard_AB.png", dpi=150)
+        plt.close(fig_std_AB)
+
+        # Figure 4: A standard basis, B V(x0)-basis
+        fig_mixed_AB, axes_mixed_AB = plt.subplots(nrows=2, ncols=1, figsize=(8, 6), sharex=True)
+        _boxplot_with_zero_floor(axes_mixed_AB[0], A_std, whis=(5, 95), showfliers=False)
+        axes_mixed_AB[0].set_title("A — Standard basis")
+        axes_mixed_AB[0].set_ylabel("Relative error")
+        axes_mixed_AB[0].grid(True, axis="y", linestyle="--", alpha=0.6)
+
+        _boxplot_with_zero_floor(axes_mixed_AB[1], B_vis, whis=(5, 95), showfliers=False)
+        axes_mixed_AB[1].set_title("B — V(x0)-basis")
+        axes_mixed_AB[1].set_xlabel("dim $V(x_0)$")
+        axes_mixed_AB[1].set_ylabel("Relative error")
+        axes_mixed_AB[1].set_xticks(xticks, xticklabels)
+        axes_mixed_AB[1].grid(True, axis="y", linestyle="--", alpha=0.6)
+
+        ymin_mixed, ymax_mixed = _compute_ylim(A_std, B_vis)
+        for ax in axes_mixed_AB:
+            ax.set_ylim(ymin_mixed, ymax_mixed)
+
+        fig_mixed_AB.tight_layout()
+        fig_mixed_AB.savefig(out_dir / f"single_{algorithm_name}_Vx0basis_AB.png", dpi=150)
+        plt.close(fig_mixed_AB)
+
+    if single_mode:
+        dims_desc = []
+        for dim in sorted(dict.fromkeys(dims), reverse=True):
+            if len(by_dim_stdA.get(dim, ())) == 0:
+                continue
+            dims_desc.append(dim)
+
+        if not dims_desc:
+            raise RuntimeError(
+                "No successful visibility-sweep trials were recorded; unable to plot results."
+            )
+
+        dataA_std_desc = [np.asarray(by_dim_stdA[k], float) for k in dims_desc]
+        dataB_std_desc = [np.asarray(by_dim_stdB[k], float) for k in dims_desc]
+        dataA_vis_desc = [np.asarray(by_dim_visA[k], float) for k in dims_desc]
+        dataB_vis_desc = [np.asarray(by_dim_visB[k], float) for k in dims_desc]
+        uni_std_data = [np.asarray(by_dim_unified_std[k], float) for k in dims_desc]
+        uni_vis_data = [np.asarray(by_dim_unified_vis[k], float) for k in dims_desc]
+        _render_single_mode_figures(
+            canonical_name,
+            dims_desc,
+            dataA_std_desc,
+            dataB_std_desc,
+            dataA_vis_desc,
+            dataB_vis_desc,
+            uni_std_data,
+            uni_vis_data,
+        )
+        return
+    
     # ---------- Figure 1: A/B — Standard vs V(x0)-basis (visible) ----------
 
     # Sort visible dimensions in descending order and discard any entries that
@@ -640,6 +756,8 @@ def run_visibility_sweep_plots(
     algos: Optional[Sequence[str]] = None,
     ensemble_size: int = 200,
     out_dir: Optional[pathlib.Path] = None,
+    *,
+    single_mode: bool = False,
 ) -> None:
     if cfg is None:
         cfg = EstimatorConsistencyConfig()
@@ -668,8 +786,15 @@ def run_visibility_sweep_plots(
     )
 
     for name in use_algos:
-        _visibility_sweep_for_algo(cfg, name, rng, ensemble_size=ensemble_size, dims=None, out_dir=out_dir)
-
+        _visibility_sweep_for_algo(
+            cfg,
+            name,
+            rng,
+            ensemble_size=ensemble_size,
+            dims=None,
+            out_dir=out_dir,
+            single_mode=single_mode,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1188,6 +1313,11 @@ def main() -> None:
         help="Run visibility-dimension sweep and save figures per algorithm.",
     )
     ap.add_argument(
+        "--single",
+        action="store_true",
+        help="Run visibility sweep with the single-figure layout.",
+    )
+    ap.add_argument(
         "--vis-ntrials",
         type=int,
         default=200,
@@ -1211,10 +1341,11 @@ def main() -> None:
     cfg.det = bool(args.det)
 
     argv_tokens = sys.argv[1:]
-    vis_requested = args.vis or any(
+    vis_requested = args.vis or args.single or any(
         token.startswith("--vis-outdir")
         or token.startswith("--vis-ntrials")
         or token.startswith("--algos")
+        or token.startswith("--single")
         for token in argv_tokens
     )
 
@@ -1232,6 +1363,7 @@ def main() -> None:
             algos=algos,
             ensemble_size=int(args.vis_ntrials),
             out_dir=out_dir,
+            single_mode=bool(args.single),
         )
     else:
         # default behavior: run the original experiment
