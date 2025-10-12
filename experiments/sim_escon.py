@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import sys
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import argparse  # NEW
@@ -198,6 +199,25 @@ def _visibility_sweep_for_algo(
     out_dir = out_dir or (cfg.save_dir / "vis_sweep")
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Prepare data for plotting. Some ensembles may fail to produce any
+    # successful trials (e.g. if every estimator invocation raised), in which
+    # case ``matplotlib`` would error when asked to plot empty data.  We filter
+    # out such dimensions up-front and skip plotting entirely if nothing was
+    # collected.
+    dims_with_data = [k for k in dims if by_dim_stdA[k]]
+    if not dims_with_data:
+        print(
+            f"[{canonical_name}] No successful trials collected; skipping plotting.",
+            flush=True,
+        )
+        return
+
+    dims_sorted = sorted(dims_with_data)
+    dataA_std = [np.asarray(by_dim_stdA[k], float) for k in dims_sorted]
+    dataB_std = [np.asarray(by_dim_stdB[k], float) for k in dims_sorted]
+    dataA_vis = [np.asarray(by_dim_visA[k], float) for k in dims_sorted]
+    dataB_vis = [np.asarray(by_dim_visB[k], float) for k in dims_sorted]
+
     import matplotlib.pyplot as plt
     def _compute_ylim(
         *data_groups: Sequence[Sequence[np.ndarray]],
@@ -283,7 +303,7 @@ def _visibility_sweep_for_algo(
     fig1.tight_layout()
     fig1.savefig(out_dir / f"vis_sweep_{canonical_name}_std_vs_V.png", dpi=150)
     plt.close(fig1)
-    
+
     # ---------- NEW (Figure 2): Axis-aligned A/B comparison (Standard vs V(x0)) ----------
     from matplotlib.lines import Line2D
 
@@ -1062,30 +1082,62 @@ def run_experiment(cfg: Optional[EstimatorConsistencyConfig] = None) -> Dict[str
 def main() -> None:
     # NEW: simple CLI to toggle deterministic x0 construction
     ap = argparse.ArgumentParser()
-    ap.add_argument("--det", action="store_true",
-                    help="Use deterministic Krylov-based x0 construction (target dim V(x0)).")
-    ap.add_argument("--vis", action="store_true",
-                    help="Run visibility-dimension sweep and save figures per algorithm.")
-    ap.add_argument("--vis-ntrials", type=int, default=200,
-                    help="Ensemble size per visible dimension (default: 200).")
-    ap.add_argument("--vis-outdir", type=str, default=None,
-                    help="Output directory for sweep figures (defaults to escons_alg_sweep).")
-    ap.add_argument("--algos", type=str, default="SINDy,MOESP,DMDc,NODE",
-                    help="Comma-separated list of algorithms to include.")
+    ap.add_argument(
+        "--det",
+        action="store_true",
+        help="Use deterministic Krylov-based x0 construction (target dim V(x0)).",
+    )
+    ap.add_argument(
+        "--vis",
+        action="store_true",
+        help="Run visibility-dimension sweep and save figures per algorithm.",
+    )
+    ap.add_argument(
+        "--vis-ntrials",
+        type=int,
+        default=200,
+        help="Ensemble size per visible dimension (default: 200).",
+    )
+    ap.add_argument(
+        "--vis-outdir",
+        type=str,
+        default=None,
+        help="Output directory for sweep figures (defaults to escons_alg_sweep).",
+    )
+    ap.add_argument(
+        "--algos",
+        type=str,
+        default=None,
+        help="Comma-separated list of algorithms to include (default: SINDy,MOESP,DMDc,NODE).",
+    )
 
     args, _ = ap.parse_known_args()
     cfg = EstimatorConsistencyConfig()
     cfg.det = bool(args.det)
 
-    if args.vis:
+    argv_tokens = sys.argv[1:]
+    vis_requested = args.vis or any(
+        token.startswith("--vis-outdir")
+        or token.startswith("--vis-ntrials")
+        or token.startswith("--algos")
+        for token in argv_tokens
+    )
+
+    if vis_requested:
         out_dir = pathlib.Path(args.vis_outdir) if args.vis_outdir else None
+        algo_spec = args.algos or "SINDy,MOESP,DMDc,NODE"
         algos = []
-        for chunk in args.algos.split(","):
+        for chunk in algo_spec.split(","):
             chunk = chunk.strip()
             if not chunk:
                 continue
             algos.extend(part for part in chunk.split() if part)
-        run_visibility_sweep_plots(cfg, algos=algos, ensemble_size=int(args.vis_ntrials), out_dir=out_dir)
+        run_visibility_sweep_plots(
+            cfg,
+            algos=algos,
+            ensemble_size=int(args.vis_ntrials),
+            out_dir=out_dir,
+        )
     else:
         # default behavior: run the original experiment
         run_experiment(cfg)
