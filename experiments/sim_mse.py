@@ -108,6 +108,7 @@ def run_ensemble(
     seed: int,
     ensemble: str,
     estimators: Sequence[str],
+    stratification: Sequence[int] | None = None,
 ):
     """Simulate estimation error/criteria over a stratified ensemble."""
 
@@ -123,9 +124,26 @@ def run_ensemble(
     if not est_funcs:
         raise RuntimeError("No valid estimators selected.")
 
-    per_def = ensvol // n
+    if stratification is None:
+        deficiency_levels = list(range(n))
+    else:
+        deficiency_levels = [int(level) for level in stratification]
+        for level in deficiency_levels:
+            if level < 0 or level >= n:
+                raise ValueError(
+                    f"Invalid stratification level {level}; must be within [0, {n - 1}]."
+                )
+
+    if not deficiency_levels:
+        raise ValueError("No stratification levels provided.")
+
+    per_def = ensvol // len(deficiency_levels)
+
     if per_def <= 0:
-        raise ValueError("ensvol must be at least n so that each deficiency has a system.")
+        raise ValueError(
+            "ensvol must be at least the number of stratification levels so that "
+            "each deficiency has a system."
+        )
 
     rows: List[dict] = []
     A_list: List[np.ndarray] = []
@@ -137,7 +155,7 @@ def run_ensemble(
     trial = 0
     system_index = 0
 
-    for deficiency in range(n):
+    for deficiency in deficiency_levels:
         for _ in range(per_def):
             A, B, meta = draw_system(
                 n=n,
@@ -392,6 +410,14 @@ def main(argv: Sequence[str] | None = None):
         default=0.9,
         help="Quantile defining the zoom rectangle per axis (default 0.9).",
     )
+    ap.add_argument(
+        "--quat",
+        action="store_true",
+        help=(
+            "Use four stratification points {0, floor(n/4), floor(n/2), n-1} instead of the "
+            "full range 0:(n-1)."
+        ),
+    )
 
     args = ap.parse_args(argv)
 
@@ -401,6 +427,11 @@ def main(argv: Sequence[str] | None = None):
     plotdir.mkdir(parents=True, exist_ok=True)
 
     estimator_list = parse_estimators(args.estimators)
+
+    if args.quat:
+        strat_levels = sorted({0, args.n // 4, args.n // 2, args.n - 1})
+    else:
+        strat_levels = None
 
     df, meta = run_ensemble(
         n=args.n,
@@ -413,6 +444,7 @@ def main(argv: Sequence[str] | None = None):
         seed=args.seed,
         ensemble=args.ensemble,
         estimators=estimator_list,
+        stratification=strat_levels,
     )
 
     df = add_transforms(df)
