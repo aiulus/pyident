@@ -204,7 +204,7 @@ def _visibility_sweep_for_algo(
         dataA_std,
         positions=positions - offset,
         widths=width,
-        whis=(5, 95),
+        whis=(10, 90),
         showfliers=False,
         patch_artist=True,
     )
@@ -212,7 +212,7 @@ def _visibility_sweep_for_algo(
         dataA_vis,
         positions=positions + offset,
         widths=width,
-        whis=(5, 95),
+        whis=(10, 90),
         showfliers=False,
         patch_artist=True,
     )
@@ -227,7 +227,7 @@ def _visibility_sweep_for_algo(
         dataB_std,
         positions=positions - offset,
         widths=width,
-        whis=(5, 95),
+        whis=(10, 90),
         showfliers=False,
         patch_artist=True,
     )
@@ -235,7 +235,7 @@ def _visibility_sweep_for_algo(
         dataB_vis,
         positions=positions + offset,
         widths=width,
-        whis=(5, 95),
+        whis=(10, 90),
         showfliers=False,
         patch_artist=True,
     )
