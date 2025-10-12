@@ -364,7 +364,7 @@ def main(argv: Sequence[str] | None = None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=10)
     ap.add_argument("--m", type=int, default=10)
-    ap.add_argument("--T", type=int, default=200)
+    ap.add_argument("--T", type=int, default=100)
     ap.add_argument("--dt", type=float, default=0.01)
     ap.add_argument("--ensvol", type=int, default=120)
     ap.add_argument("--x0count", type=int, default=1000)
