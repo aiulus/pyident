@@ -287,6 +287,235 @@ def scatter_plots(df: pd.DataFrame, ykey: str, outdir: pathlib.Path, tag: str):
         plt.close(fig)
 
 
+def scatter_plots_multicol(df: pd.DataFrame, ykeys: list[str], outdir: pathlib.Path, tag: str):
+    """
+    Produce scatter plots that overlay multiple estimator errors on the same axes.
+    Files are prefixed with ``mulicol_`` per the requested naming convention.
+    """
+    if not ykeys:
+        return
+
+    # Map error columns to human-friendly labels and colors.
+    color_cycle = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
+    default_label_map = {key: key.replace("err_", "").upper() for key in ykeys}
+    label_map = {**default_label_map, "err_dmdc": "DMDc", "err_moesp": "MOESP"}
+    colors = {key: color_cycle[i % len(color_cycle)] for i, key in enumerate(ykeys)}
+
+    pairs = [
+        ("x_inv_pbh", "1 / PBH (structured)"),
+        ("x_inv_krylov_smin", "1 / σ_min(K_n)"),
+        ("x_inv_mu", "1 / mu_min"),
+    ]
+
+    for x, xlabel in pairs:
+        fig, ax = plt.subplots(figsize=(5.2, 4.0))
+        any_plotted = False
+        for ykey in ykeys:
+            if ykey not in df:
+                continue
+
+            xvals = df[x].to_numpy()
+            yvals = df[ykey].to_numpy()
+            mask = np.isfinite(xvals) & np.isfinite(yvals)
+            n_eff = int(mask.sum())
+            if n_eff >= 3:
+                r, p = pearsonr(xvals[mask], yvals[mask])
+            else:
+                r, p = np.nan, np.nan
+            r_s = "nan" if not np.isfinite(np.asarray(r)) else f"{float(r):.3f}"
+            p_s = "nan" if not np.isfinite(np.asarray(p)) else f"{float(p):.1e}"
+
+            label = label_map.get(ykey, ykey)
+            ax.scatter(
+                xvals,
+                yvals,
+                s=18,
+                color=colors[ykey],
+                label=rf"{label}: $\rho$={r_s}, p={p_s}, n={n_eff}",
+            )
+            any_plotted = True
+
+        if not any_plotted:
+            plt.close(fig)
+            continue
+
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("REE (estimator)")
+        ax.set_title("Estimation error vs. identifiability criterion (multi-estimator)")
+        ax.legend(frameon=True, loc="best")
+        fig.savefig(outdir / f"mulicol_{x}_vs_errors_{tag}.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+def _multicol_styling(
+    ykeys: list[str],
+    *,
+    colors: dict[str, str] | None = None,
+    label_overrides: dict[str, str] | None = None,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Shared helper for multi-color scatter styling."""
+    color_cycle = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
+    default_label_map = {key: key.replace("err_", "").upper() for key in ykeys}
+    label_map = {
+        **default_label_map,
+        "err_dmdc": "DMDc",
+        "err_moesp": "MOESP",
+        **(label_overrides or {}),
+    }
+    if colors is None:
+        colors = {key: color_cycle[i % len(color_cycle)] for i, key in enumerate(ykeys)}
+    return colors, label_map
+
+
+def scatter_plots_multicol(
+    df: pd.DataFrame,
+    ykeys: list[str],
+    outdir: pathlib.Path,
+    tag: str,
+    *,
+    colors: dict[str, str] | None = None,
+    label_overrides: dict[str, str] | None = None,
+):
+    """
+    Produce scatter plots that overlay multiple estimator errors on the same axes.
+    Files are prefixed with ``mulicol_`` per the requested naming convention.
+    """
+    if not ykeys:
+        return
+
+    colors, label_map = _multicol_styling(
+        ykeys, colors=colors, label_overrides=label_overrides
+    )
+
+    pairs = [
+        ("x_inv_pbh", "1 / PBH (structured)"),
+        ("x_inv_krylov_smin", "1 / σ_min(K_n)"),
+        ("x_inv_mu", "1 / mu_min"),
+    ]
+
+    for x, xlabel in pairs:
+        fig, ax = plt.subplots(figsize=(5.2, 4.0))
+        any_plotted = False
+        for ykey in ykeys:
+            if ykey not in df:
+                continue
+
+            xvals = df[x].to_numpy()
+            yvals = df[ykey].to_numpy()
+            mask = np.isfinite(xvals) & np.isfinite(yvals)
+            n_eff = int(mask.sum())
+            if n_eff >= 3:
+                r, p = pearsonr(xvals[mask], yvals[mask])
+            else:
+                r, p = np.nan, np.nan
+            r_s = "nan" if not np.isfinite(np.asarray(r)) else f"{float(r):.3f}"
+            p_s = "nan" if not np.isfinite(np.asarray(p)) else f"{float(p):.1e}"
+
+            label = label_map.get(ykey, ykey)
+            ax.scatter(
+                xvals,
+                yvals,
+                s=18,
+                color=colors[ykey],
+                label=rf"{label}: $\rho$={r_s}, p={p_s}, n={n_eff}",
+            )
+            any_plotted = True
+
+        if not any_plotted:
+            plt.close(fig)
+            continue
+
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("REE (estimator)")
+        ax.set_title("Estimation error vs. identifiability criterion (multi-estimator)")
+        ax.legend(frameon=True, loc="best")
+        fig.savefig(outdir / f"mulicol_{x}_vs_errors_{tag}.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+
+def scatter_plots_multicol_zoom(
+    df: pd.DataFrame,
+    ykeys: list[str],
+    outdir: pathlib.Path,
+    tag: str,
+    *,
+    q_zoom: float = 0.9,
+    colors: dict[str, str] | None = None,
+    label_overrides: dict[str, str] | None = None,
+):
+    """
+    Zoomed-in variant of ``scatter_plots_multicol`` using the shared lower-left
+    quantile box across all provided estimators.
+    """
+    if not ykeys:
+        return
+
+    colors, label_map = _multicol_styling(
+        ykeys, colors=colors, label_overrides=label_overrides
+    )
+
+    pairs = [
+        ("x_inv_pbh", "1 / PBH (structured)"),
+        ("x_inv_krylov_smin", "1 / σ_min(K_n)"),
+        ("x_inv_mu", "1 / mu_min"),
+    ]
+
+    for x, xlabel in pairs:
+        xvals = df[x].to_numpy()
+        y_arrays = [df[ykey].to_numpy() for ykey in ykeys if ykey in df]
+        if not y_arrays:
+            continue
+        stacked_x = np.tile(xvals, len(y_arrays))
+        stacked_y = np.concatenate(y_arrays)
+        lims = _compute_zoom_limits(stacked_x, stacked_y, q=q_zoom)
+        if lims is None:
+            continue
+        xlo, xhi, ylo, yhi = lims
+
+        fig, ax = plt.subplots(figsize=(5.2, 4.0))
+        any_plotted = False
+        for ykey in ykeys:
+            if ykey not in df:
+                continue
+
+            yvals = df[ykey].to_numpy()
+            mask = np.isfinite(xvals) & np.isfinite(yvals)
+            n_eff = int(mask.sum())
+            if n_eff >= 3:
+                r, p = pearsonr(xvals[mask], yvals[mask])
+            else:
+                r, p = np.nan, np.nan
+            r_s = "nan" if not np.isfinite(np.asarray(r)) else f"{float(r):.3f}"
+            p_s = "nan" if not np.isfinite(np.asarray(p)) else f"{float(p):.1e}"
+
+            label = label_map.get(ykey, ykey)
+            ax.scatter(
+                xvals,
+                yvals,
+                s=18,
+                color=colors[ykey],
+                label=rf"{label}: $\rho$={r_s}, p={p_s}, n={n_eff}",
+            )
+            any_plotted = True
+
+        if not any_plotted:
+            plt.close(fig)
+            continue
+
+        ax.set_xlim(xlo, xhi)
+        ax.set_ylim(ylo, yhi)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("REE (estimator)")
+        ax.set_title(
+            f"Estimation error vs. identifiability criterion (multi-estimator zoom {int(100*q_zoom)}th)"
+        )
+        ax.legend(frameon=True, loc="best")
+        fig.savefig(
+            outdir / f"mulicol_{x}_vs_errors_{tag}_zoom.png", dpi=150, bbox_inches="tight"
+        )
+        plt.close(fig)
+
+
+
 def _compute_zoom_limits(xvals: np.ndarray, yvals: np.ndarray, q: float = 0.9):
     """
     Lower-left zoom box: [min(x), q-quantile(x)] × [min(y), q-quantile(y)].
@@ -408,6 +637,18 @@ def main():
         scatter_plots(df, y, plotdir, tag)
         if args.zoom:
             scatter_plots_zoom(df, y, plotdir, tag, q_zoom=args.zoom_q)
+
+    # Multi-color plots overlaying the common estimators (currently MOESP and DMDc).
+    multikeys = [key for key in ("err_dmdc", "err_moesp") if key in ycols]
+    if len(multikeys) >= 2:
+        scatter_plots_multicol(df, multikeys, plotdir, tag)
+        if args.zoom:
+            scatter_plots_multicol_zoom(df, multikeys, plotdir, tag, q_zoom=args.zoom_q)
+
+    # Multi-color plots overlaying the common estimators (currently MOESP and DMDc).
+    multikeys = [key for key in ("err_dmdc", "err_moesp") if key in ycols]
+    if len(multikeys) >= 2:
+        scatter_plots_multicol(df, multikeys, plotdir, tag)
 
     # Minimal metadata
     meta_path = outdir / f"system_{tag}.npz"
