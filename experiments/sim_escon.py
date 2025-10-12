@@ -103,6 +103,11 @@ def _visibility_sweep_for_algo(
     base = "stable" if base == "A_stbl_B_ctrb" else base
 
     for k in dims:
+        print(
+            f"[{algo_name}] dim {k}: starting {ensemble_size} trials",
+            flush=True,
+        )
+        progress_step = max(1, ensemble_size // 10)       
         # Build ensemble of size ensemble_size at this visible dimension
         count = 0
         while count < ensemble_size:
@@ -162,7 +167,16 @@ def _visibility_sweep_for_algo(
             by_dim_unified_vis[k].append(unified_vis)
 
             count += 1
+            if count % progress_step == 0 or count == ensemble_size:
+                print(
+                    f"[{algo_name}] dim {k}: completed {count}/{ensemble_size} trials",
+                    flush=True,
+                )
 
+        print(
+            f"[{algo_name}] dim {k}: finished {ensemble_size} successful trials",
+            flush=True,
+        )
     # ---------- plotting: standard-basis ----------
     out_dir = out_dir or (cfg.save_dir / "vis_sweep")
     out_dir.mkdir(parents=True, exist_ok=True)

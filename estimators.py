@@ -117,7 +117,7 @@ def node_fit(
     dt: float,
     epochs: int = 200,
     lr: float = 1e-2,
-    verbose: bool = False,
+    verbose: bool = True,
     log_every: int = 10,
     return_history: bool = False,
 ):

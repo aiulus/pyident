@@ -8,11 +8,11 @@ from typing import *
 # )
 
 # Current experiment collection
-from .experiments.sim_eqv_cl import run_experiment as run_eqvcl
-from .experiments.sim_eqvcl_sweep import run_experiment as run_eqvcl_sweep
+from .discarded.sim_eqv_cl import run_experiment as run_eqvcl
+from .discarded.sim_eqvcl_sweep import run_experiment as run_eqvcl_sweep
 from .experiments.sim_undera import run_experiment as run_undera
 from .experiments.sim_sparse import run_experiment as run_sparse
-from .experiments.F1_x0_boxplot import run_experiment as run_x0_filter
+from .discarded.F1_x0_boxplot import run_experiment as run_x0_filter
 
 __all__ = [
     # Core experiments
