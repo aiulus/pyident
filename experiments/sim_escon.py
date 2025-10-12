@@ -172,98 +172,84 @@ def _visibility_sweep_for_algo(
     # ---------- Figure 1: A/B — Standard vs V(x0)-basis (visible) ----------
 
     dims_sorted = list(sorted(dims, reverse=True))  # n..down..5
-    fig1, axes1 = plt.subplots(nrows=2, ncols=2, figsize=(12, 6), sharex=True)
 
-    # A — standard basis (top-left)
+    # shared data for plotting
     dataA_std = [np.asarray(by_dim_stdA[k], float) for k in dims_sorted]
-    axes1[0, 0].boxplot(dataA_std, whis=(5, 95), showfliers=False)
-    axes1[0, 0].set_title("A — Standard basis")
-    axes1[0, 0].set_ylabel("Relative error")
-    axes1[0, 0].grid(True, axis="y", linestyle="--", alpha=0.6)
-
-    # B — standard basis (bottom-left)
-    dataB_std = [np.asarray(by_dim_stdB[k], float) for k in dims_sorted]
-    axes1[1, 0].boxplot(dataB_std, whis=(5, 95), showfliers=False)
-    axes1[1, 0].set_title("B — Standard basis")
-    axes1[1, 0].set_xlabel("dim $V(x_0)$")
-    axes1[1, 0].set_ylabel("Relative error")
-    axes1[1, 0].grid(True, axis="y", linestyle="--", alpha=0.6)
-    axes1[1, 0].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
-
-    # A — V(x0)-basis (visible block) (top-right)
     dataA_vis = [np.asarray(by_dim_visA[k], float) for k in dims_sorted]
-    axes1[0, 1].boxplot(dataA_vis, whis=(5, 95), showfliers=False)
-    axes1[0, 1].set_title("A — V(x0)-basis (visible)")
-    axes1[0, 1].grid(True, axis="y", linestyle="--", alpha=0.6)
-
-    # B — V(x0)-basis (visible block) (bottom-right)
+    dataB_std = [np.asarray(by_dim_stdB[k], float) for k in dims_sorted]
     dataB_vis = [np.asarray(by_dim_visB[k], float) for k in dims_sorted]
-    axes1[1, 1].boxplot(dataB_vis, whis=(5, 95), showfliers=False)
-    axes1[1, 1].set_title("B — V(x0)-basis (visible)")
-    axes1[1, 1].set_xlabel("dim $V(x_0)$")
-    axes1[1, 1].grid(True, axis="y", linestyle="--", alpha=0.6)
-    axes1[1, 1].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
 
-    # subtle vertical separator between A (left col) and B (right col)
-    #fig1.lines.append(plt.Line2D([0.5, 0.5], [0.08, 0.95], transform=fig1.transFigure, linewidth=1))
+    # colors for standard vs V(x0)-basis
+    color_std = "#1f77b4"
+    color_vis = "#ff7f0e"
 
-    fig1.suptitle(f"{algo_name}: Standard vs V(x0)-basis errors", y=0.98)
-    fig1.tight_layout()
-    fig1.savefig(out_dir / f"vis_sweep_{algo_name}_std_vs_V.png", dpi=150)
-    plt.close(fig1)
+    def _apply_box_colors(boxplot_dict, color):
+        for patch in boxplot_dict.get("boxes", []):
+            patch.set(facecolor=color, alpha=0.6)
+        for key in ("whiskers", "caps", "medians", "means", "fliers"):
+            for artist in boxplot_dict.get(key, []):
+                artist.set(color=color)
+                
+    # ---------- Figure: Axis-aligned A/B comparison with colored basis ----------
+    from matplotlib.patches import Patch
 
-    # ---------- NEW (Figure 2): Axis-aligned A/B comparison (Standard vs V(x0)) ----------
-    from matplotlib.lines import Line2D
+    fig_box, axes_box = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharex=True)
+    positions = np.arange(1, len(dims_sorted) + 1, dtype=float)
 
-    fig2, axes2 = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharex=True)
-
-    positions = np.arange(1, len(dims_sorted) + 1)
     offset = 0.18
     width = 0.32
 
-    # A: Standard vs V(x0) grouped
-    bpA_std = axes2[0].boxplot(
+    # A errors
+    bpA_std = axes_box[0].boxplot(
         dataA_std,
         positions=positions - offset,
         widths=width,
         whis=(5, 95),
         showfliers=False,
+        patch_artist=True,
     )
-    bpA_vis = axes2[0].boxplot(
+    bpA_vis = axes_box[0].boxplot(
         dataA_vis,
         positions=positions + offset,
         widths=width,
         whis=(5, 95),
         showfliers=False,
+        patch_artist=True,
     )
-    axes2[0].set_title("A — Standard vs V(x0) (axis-aligned)")
-    axes2[0].set_ylabel("Relative error")
-    axes2[0].grid(True, axis="y", linestyle="--", alpha=0.6)
+    _apply_box_colors(bpA_std, color_std)
+    _apply_box_colors(bpA_vis, color_vis)
+    axes_box[0].set_title("A — Estimation error")
+    axes_box[0].set_ylabel("Relative error")
+    axes_box[0].grid(True, axis="y", linestyle="--", alpha=0.6)
 
-    # B: Standard vs V(x0) grouped
-    bpB_std = axes2[1].boxplot(
+    # B errors
+    bpB_std = axes_box[1].boxplot(
         dataB_std,
         positions=positions - offset,
         widths=width,
         whis=(5, 95),
         showfliers=False,
+        patch_artist=True,
     )
-    bpB_vis = axes2[1].boxplot(
+    bpB_vis = axes_box[1].boxplot(
         dataB_vis,
         positions=positions + offset,
         widths=width,
         whis=(5, 95),
         showfliers=False,
+        patch_artist=True,
     )
-    axes2[1].set_title("B — Standard vs V(x0) (axis-aligned)")
-    axes2[1].grid(True, axis="y", linestyle="--", alpha=0.6)
+    _apply_box_colors(bpB_std, color_std)
+    _apply_box_colors(bpB_vis, color_vis)
+    axes_box[1].set_title("B — Estimation error")
+    axes_box[1].grid(True, axis="y", linestyle="--", alpha=0.6)
 
     # Shared x-ticks
-    for ax in axes2:
+    for ax in axes_box:
         ax.set_xlabel("dim $V(x_0)$")
         ax.set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
 
-    # Compute global y-limits across all four series so A and B are strictly axis-aligned
+    # Align y-limits between A and B plots
     _all_vals = []
     for seq in (dataA_std, dataA_vis, dataB_std, dataB_vis):
         for arr in seq:
@@ -273,43 +259,52 @@ def _visibility_sweep_for_algo(
         ymin = 0.0
         ymax = float(np.max([np.nanmax(a) for a in _all_vals if a.size]))
         pad = 0.05 * (ymax if ymax > 0 else 1.0)
-        for ax in axes2:
+        for ax in axes_box:
             ax.set_ylim(ymin, ymax + pad)
 
     # Legend (no custom colors/styles)
     legend_handles = [
-        Line2D([0], [0], label="Standard basis"),
-        Line2D([0], [0], label="V(x0)-basis (visible)"),
+        Patch(facecolor=color_std, alpha=0.6, label="Standard basis"),
+        Patch(facecolor=color_vis, alpha=0.6, label="V(x0)-basis"),
     ]
-    axes2[1].legend(handles=legend_handles, loc="upper right", frameon=False)
+    axes_box[1].legend(handles=legend_handles, loc="upper right", frameon=False)
 
-    fig2.suptitle(f"{algo_name}: Axis-aligned Standard vs V(x0) errors", y=0.98)
-    fig2.tight_layout()
-    fig2.savefig(out_dir / f"vis_sweep_{algo_name}_std_vs_V_axis_aligned.png", dpi=150)
-    plt.close(fig2)
+    fig_box.suptitle(f"{algo_name}: Standard vs V(x0) estimation errors", y=0.98)
+    fig_box.tight_layout()
+    fig_box.savefig(out_dir / f"vis_sweep_{algo_name}_std_vs_V.png", dpi=150)
+    plt.close(fig_box)
 
 
+    # ---------- NEW: unified (A-B mean) errors: standard vs V(x0)-basis ----------
+    fig3, ax3 = plt.subplots(figsize=(8, 4))
 
-        # ---------- NEW: unified (A-B mean) errors: standard vs V(x0)-basis ----------
-    fig3, axes3 = plt.subplots(nrows=1, ncols=2, figsize=(12, 4), sharex=True)
-
-    # Left: standard basis unified
     uni_std_data = [np.asarray(by_dim_unified_std[k], float) for k in dims_sorted]
-    axes3[0].boxplot(uni_std_data, whis=(5, 95), showfliers=False)
-    axes3[0].set_title(f"{algo_name}: Unified error (A-B mean) — Standard basis")
-    axes3[0].set_ylabel("Relative error (A-B mean)")
-    axes3[0].grid(True, axis="y", linestyle="--", alpha=0.6)
 
     # Right: V(x0)-basis unified (visible block)
     uni_vis_data = [np.asarray(by_dim_unified_vis[k], float) for k in dims_sorted]
-    axes3[1].boxplot(uni_vis_data, whis=(5, 95), showfliers=False)
-    axes3[1].set_title(f"{algo_name}: Unified error (A-B mean) — V(x0)-basis")
-    axes3[1].grid(True, axis="y", linestyle="--", alpha=0.6)
 
-    # Shared x-ticks
-    for ax in axes3:
-        ax.set_xlabel("dim $V(x_0)$")
-        ax.set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
+    positions = np.arange(1, len(dims_sorted) + 1, dtype=float)
+    width = 0.35
+
+    def _nanmean_or_zero(arr: np.ndarray) -> float:
+        if arr.size == 0:
+            return 0.0
+        return float(np.nanmean(arr))
+
+    std_means = [_nanmean_or_zero(arr) for arr in uni_std_data]
+    vis_means = [_nanmean_or_zero(arr) for arr in uni_vis_data]
+
+    ax3.bar(positions - width / 2, std_means, width=width, color=color_std, alpha=0.8, label="Standard basis")
+    ax3.bar(positions + width / 2, vis_means, width=width, color=color_vis, alpha=0.8, label="V(x0)-basis")
+
+    ax3.set_title(f"{algo_name}: Unified error (A-B mean)")
+    ax3.set_ylabel("Relative error (A-B mean)")
+    ax3.set_xlabel("dim $V(x_0)$")
+    ax3.set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
+    ax3.set_ylim(bottom=0.0)
+    ax3.grid(True, axis="y", linestyle="--", alpha=0.6)
+    ax3.legend(frameon=False)
+
 
     fig3.tight_layout()
     fig3.savefig(out_dir / f"vis_sweep_{algo_name}_unified.png", dpi=150)
