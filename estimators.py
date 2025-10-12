@@ -4,7 +4,6 @@ from typing import Optional, Tuple
 import numpy as np
 import pysindy
 import torch
-from torchdiffeq import odeint
 
 
 class NODE(torch.nn.Module):
@@ -121,31 +120,13 @@ def node_fit(
     verbose: bool = False,
     log_every: int = 10,
     return_history: bool = False,
-    ode_method: str = "rk4",
 ):
-    """
-    Train a linear neural ODE using torchdiffeq and return the discretized (A, B).
+    """Train a linear continuous-time NODE and return discretized dynamics.
 
-    Parameters
-    ----------
-    Xtrain, Xp : array_like, shape (n, T)
-        ``Xtrain`` contains states :math:`x_k`; ``Xp`` contains :math:`x_{k+1}`.
-    Utrain : array_like, shape (m, T) or (T, m)
-        Control inputs aligned with ``Xtrain``.
-    dt : float
-        Sample period used for integration.
-    epochs : int
-        Number of Adam steps.
-    lr : float
-        Learning rate for Adam.
-    verbose : bool
-        If True, print the loss every ``log_every`` epochs.
-    log_every : int
-        Interval for logging.
-    return_history : bool
-        If True, also return the per-epoch MSE history as a numpy array.
-    ode_method : str
-        Integration method passed to ``torchdiffeq.odeint``.
+    The model parameterizes continuous-time matrices :math:`(A_c, B_c)` and uses
+    the matrix exponential of the block matrix to obtain discrete-time dynamics
+    during training. This keeps the NODE interpretation intact while avoiding the
+    heavy per-epoch ODE solves that made the original implementation slow.
     """
 
     n, T = Xtrain.shape
@@ -153,22 +134,35 @@ def node_fit(
     m = U_cm.shape[0]
 
     device = torch.device("cpu")
-    model = LinearContinuousNODE(n, m).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    dtype = torch.float32
 
-    Xtrain_t = torch.tensor(Xtrain.T, dtype=torch.float32, device=device)
-    Utrain_t = torch.tensor(U_cm.T, dtype=torch.float32, device=device)
-    Xp_t = torch.tensor(Xp.T, dtype=torch.float32, device=device)
+    Xk = torch.tensor(Xtrain.T, dtype=dtype, device=device)  # (T, n)
+    Uk = torch.tensor(U_cm.T, dtype=dtype, device=device)    # (T, m)
+    Xnext = torch.tensor(Xp.T, dtype=dtype, device=device)   # (T, n)
 
-    z0 = torch.cat([Xtrain_t, Utrain_t], dim=1)
-    t_eval = torch.tensor([0.0, float(dt)], dtype=torch.float32, device=device)
+    A_ct = torch.nn.Parameter(torch.zeros((n, n), dtype=dtype, device=device))
+    B_ct = torch.nn.Parameter(torch.zeros((n, m), dtype=dtype, device=device))
+    params = [A_ct, B_ct]
+    optimizer = torch.optim.Adam(params, lr=lr)
 
-    history = []
+    history: list[float] = []
+
+    def _block_matrix() -> torch.Tensor:
+        block = torch.zeros((n + m, n + m), dtype=dtype, device=device)
+        block[:n, :n] = A_ct
+        block[:n, n:] = B_ct
+        return block
+
     for epoch in range(int(epochs)):
         optimizer.zero_grad()
-        sol = odeint(model, z0, t_eval, method=ode_method)
-        x_pred = sol[-1, :, :n]
-        loss = torch.nn.functional.mse_loss(x_pred, Xp_t)
+
+        block = _block_matrix()
+        exp_block = torch.matrix_exp(block * float(dt))
+        Ad = exp_block[:n, :n]
+        Bd = exp_block[:n, n:]
+
+        preds = Xk @ Ad.T + Uk @ Bd.T
+        loss = torch.nn.functional.mse_loss(preds, Xnext)
         loss.backward()
         optimizer.step()
 
@@ -179,15 +173,14 @@ def node_fit(
             print(f"[NODE] epoch {epoch:4d}  mse={loss_value:.6e}")
 
     with torch.no_grad():
-        A_ct = model.A.detach().cpu().numpy()
-        B_ct = model.B.detach().cpu().numpy()
+        block = _block_matrix()
+        exp_block = torch.matrix_exp(block * float(dt))
+        Ad = exp_block[:n, :n].cpu().numpy()
+        Bd = exp_block[:n, n:].cpu().numpy()
 
-    from .metrics import cont2discrete_zoh
-
-    Ahat, Bhat = cont2discrete_zoh(A_ct, B_ct, float(dt))
     if return_history:
-        return Ahat, Bhat, np.array(history)
-    return Ahat, Bhat
+        return Ad, Bd, np.array(history)
+    return Ad, Bd
 
 
 def sindy_fit(
@@ -195,7 +188,7 @@ def sindy_fit(
     Xp: np.ndarray,
     U: np.ndarray,
     dt: float,
-    degree: int = 2,
+    degree: int = 1,
     optimizer: Optional[object] = None,
     feature_library: Optional[object] = None,
     verbose: bool = False,
@@ -209,10 +202,15 @@ def sindy_fit(
 
     if feature_library is None:
         feature_library = pysindy.feature_library.PolynomialLibrary(
-            degree=degree, include_bias=False
+            degree=degree,
+            include_bias=False,
         )
     if optimizer is None:
-        optimizer = pysindy.optimizers.STLSQ()
+        optimizer = pysindy.optimizers.STLSQ(
+            threshold=1e-4,
+            max_iter=10,
+            normalize_columns=True,
+        )
 
     model = pysindy.SINDy(
         discrete_time=True,

@@ -183,6 +183,16 @@ def _visibility_sweep_for_algo(
     color_std = "#1f77b4"
     color_vis = "#ff7f0e"
 
+    # plotting helper to avoid vanishingly small values from disappearing
+    min_display_value = 1e-10
+
+    def _clip_for_display(arr: np.ndarray) -> np.ndarray:
+        if not isinstance(arr, np.ndarray):
+            return arr
+        if arr.size == 0:
+            return arr
+        return np.where(arr < min_display_value, min_display_value, arr)
+
     def _apply_box_colors(boxplot_dict, color):
         for patch in boxplot_dict.get("boxes", []):
             patch.set(facecolor=color, alpha=0.6)
@@ -199,9 +209,23 @@ def _visibility_sweep_for_algo(
     offset = 0.18
     width = 0.32
 
+    # Prepare clipped datasets so extremely small values remain visible in plots
+    dataA_std_display = [
+        _clip_for_display(np.asarray(by_dim_stdA[k], float)) for k in dims_sorted
+    ]
+    dataA_vis_display = [
+        _clip_for_display(np.asarray(by_dim_visA[k], float)) for k in dims_sorted
+    ]
+    dataB_std_display = [
+        _clip_for_display(np.asarray(by_dim_stdB[k], float)) for k in dims_sorted
+    ]
+    dataB_vis_display = [
+        _clip_for_display(np.asarray(by_dim_visB[k], float)) for k in dims_sorted
+    ]
+
     # A errors
     bpA_std = axes_box[0].boxplot(
-        dataA_std,
+        dataA_std_display,
         positions=positions - offset,
         widths=width,
         whis=(10, 90),
@@ -209,7 +233,7 @@ def _visibility_sweep_for_algo(
         patch_artist=True,
     )
     bpA_vis = axes_box[0].boxplot(
-        dataA_vis,
+        dataA_vis_display,
         positions=positions + offset,
         widths=width,
         whis=(10, 90),
@@ -224,7 +248,7 @@ def _visibility_sweep_for_algo(
 
     # B errors
     bpB_std = axes_box[1].boxplot(
-        dataB_std,
+        dataB_std_display,
         positions=positions - offset,
         widths=width,
         whis=(10, 90),
@@ -232,7 +256,7 @@ def _visibility_sweep_for_algo(
         patch_artist=True,
     )
     bpB_vis = axes_box[1].boxplot(
-        dataB_vis,
+        dataB_vis_display,
         positions=positions + offset,
         widths=width,
         whis=(10, 90),
@@ -251,7 +275,12 @@ def _visibility_sweep_for_algo(
 
     # Align y-limits between A and B plots
     _all_vals = []
-    for seq in (dataA_std, dataA_vis, dataB_std, dataB_vis):
+    for seq in (
+        dataA_std_display,
+        dataA_vis_display,
+        dataB_std_display,
+        dataB_vis_display,
+    ):
         for arr in seq:
             if isinstance(arr, np.ndarray) and arr.size:
                 _all_vals.append(np.asarray(arr, float))
@@ -270,7 +299,15 @@ def _visibility_sweep_for_algo(
     axes_box[1].legend(handles=legend_handles, loc="upper right", frameon=False)
 
     fig_box.suptitle(f"{algo_name}: Standard vs V(x0) estimation errors", y=0.98)
-    fig_box.tight_layout()
+    fig_box.text(
+        0.5,
+        0.02,
+        f"Values below {min_display_value:.0e} are shown at {min_display_value:.0e} for visibility.",
+        ha="center",
+        va="bottom",
+        fontsize=9,
+    )
+    fig_box.tight_layout(rect=(0, 0.04, 1, 1))
     fig_box.savefig(out_dir / f"vis_sweep_{algo_name}_std_vs_V.png", dpi=150)
     plt.close(fig_box)
 
@@ -280,33 +317,57 @@ def _visibility_sweep_for_algo(
 
     uni_std_data = [np.asarray(by_dim_unified_std[k], float) for k in dims_sorted]
 
-    # Right: V(x0)-basis unified (visible block)
     uni_vis_data = [np.asarray(by_dim_unified_vis[k], float) for k in dims_sorted]
 
+    uni_std_display = [_clip_for_display(arr) for arr in uni_std_data]
+    uni_vis_display = [_clip_for_display(arr) for arr in uni_vis_data]
+
     positions = np.arange(1, len(dims_sorted) + 1, dtype=float)
-    width = 0.35
+    offset = 0.18
+    width = 0.32
 
-    def _nanmean_or_zero(arr: np.ndarray) -> float:
-        if arr.size == 0:
-            return 0.0
-        return float(np.nanmean(arr))
-
-    std_means = [_nanmean_or_zero(arr) for arr in uni_std_data]
-    vis_means = [_nanmean_or_zero(arr) for arr in uni_vis_data]
-
-    ax3.bar(positions - width / 2, std_means, width=width, color=color_std, alpha=0.8, label="Standard basis")
-    ax3.bar(positions + width / 2, vis_means, width=width, color=color_vis, alpha=0.8, label="V(x0)-basis")
+    bp_uni_std = ax3.boxplot(
+        uni_std_display,
+        positions=positions - offset,
+        widths=width,
+        whis=(10, 90),
+        showfliers=False,
+        patch_artist=True,
+    )
+    bp_uni_vis = ax3.boxplot(
+        uni_vis_display,
+        positions=positions + offset,
+        widths=width,
+        whis=(10, 90),
+        showfliers=False,
+        patch_artist=True,
+    )
+    _apply_box_colors(bp_uni_std, color_std)
+    _apply_box_colors(bp_uni_vis, color_vis)
 
     ax3.set_title(f"{algo_name}: Unified error (A-B mean)")
     ax3.set_ylabel("Relative error (A-B mean)")
     ax3.set_xlabel("dim $V(x_0)$")
     ax3.set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
-    ax3.set_ylim(bottom=0.0)
+    ax3.set_ylim(bottom=min_display_value)
     ax3.grid(True, axis="y", linestyle="--", alpha=0.6)
-    ax3.legend(frameon=False)
+    ax3.legend(
+        handles=[
+            Patch(facecolor=color_std, alpha=0.6, label="Standard basis"),
+            Patch(facecolor=color_vis, alpha=0.6, label="V(x0)-basis"),
+        ],
+        frameon=False,
+    )
 
-
-    fig3.tight_layout()
+    fig3.text(
+        0.5,
+        0.02,
+        f"Values below {min_display_value:.0e} are shown at {min_display_value:.0e} for visibility.",
+        ha="center",
+        va="bottom",
+        fontsize=9,
+    )
+    fig3.tight_layout(rect=(0, 0.04, 1, 1))
     fig3.savefig(out_dir / f"vis_sweep_{algo_name}_unified.png", dpi=150)
     plt.close(fig3)
 
