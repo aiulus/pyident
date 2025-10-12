@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import sys
-from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import argparse  # NEW
 import pathlib
@@ -219,6 +219,100 @@ def _visibility_sweep_for_algo(
     dataB_vis = [np.asarray(by_dim_visB[k], float) for k in dims_sorted]
 
     import matplotlib.pyplot as plt
+    def _boxplot_with_zero_floor(
+        ax: plt.Axes,
+        data: Sequence[np.ndarray],
+        *,
+        zero_thresh: float = 1e-10,
+        positions: Optional[Sequence[float]] = None,
+        widths: Optional[Union[float, Sequence[float]]] = None,
+        **kwargs,
+    ):
+        """Draw a boxplot and replace near-zero series with a baseline bar.
+
+        Any series whose maximum finite value is below ``zero_thresh`` is rendered as a
+        thick horizontal bar at ``y = 0`` instead of a conventional box.  This keeps
+        the shared-axis figures readable when all errors are numerically zero.
+        """
+
+        # ``matplotlib`` expects list-like data. Ensure ``np.ndarray`` instances are
+        # passed through unchanged while guarding against ``None``.
+        cleaned: List[np.ndarray] = []
+        zero_flags: List[bool] = []
+        for arr in data:
+            if arr is None:
+                cleaned.append(np.asarray([np.nan]))
+                zero_flags.append(False)
+                continue
+
+            arr = np.asarray(arr, dtype=float)
+            finite_vals = arr[np.isfinite(arr)]
+            if finite_vals.size == 0:
+                cleaned.append(np.asarray([np.nan]))
+                zero_flags.append(False)
+                continue
+            cleaned.append(finite_vals)
+            zero_flags.append(float(np.max(finite_vals)) < zero_thresh)
+
+        bp = ax.boxplot(cleaned, positions=positions, widths=widths, **kwargs)
+
+        if not any(zero_flags):
+            return bp
+
+        if positions is None:
+            pos_arr = np.arange(1, len(cleaned) + 1, dtype=float)
+        else:
+            pos_arr = np.asarray(positions, dtype=float)
+
+        if widths is None:
+            width_arr = np.full(len(cleaned), 0.5, dtype=float)
+        elif np.isscalar(widths):
+            width_arr = np.full(len(cleaned), float(widths))
+        else:
+            width_arr = np.asarray(widths, dtype=float)
+
+        for idx, use_bar in enumerate(zero_flags):
+            if not use_bar:
+                continue
+
+            if "boxes" in bp:
+                bp["boxes"][idx].set_visible(False)
+                edge_color = bp["boxes"][idx].get_edgecolor()
+            else:
+                edge_color = None
+
+            if "medians" in bp:
+                bp["medians"][idx].set_visible(False)
+
+            if "whiskers" in bp:
+                bp["whiskers"][2 * idx].set_visible(False)
+                bp["whiskers"][2 * idx + 1].set_visible(False)
+
+            if "caps" in bp:
+                bp["caps"][2 * idx].set_visible(False)
+                bp["caps"][2 * idx + 1].set_visible(False)
+
+            if "fliers" in bp and bp["fliers"]:
+                bp["fliers"][idx].set_visible(False)
+
+            # ``edge_color`` may be an array of RGBA tuples. Normalise to a single
+            # colour usable by ``hlines``.
+            if isinstance(edge_color, (list, tuple, np.ndarray)):
+                edge_color = np.asarray(edge_color)
+                if edge_color.ndim > 1:
+                    edge_color = edge_color[0]
+                edge_color = tuple(edge_color)
+
+            if edge_color is None:
+                edge_color = "C0"
+
+            half_width = 0.5 * float(width_arr[idx])
+            x0 = pos_arr[idx] - half_width
+            x1 = pos_arr[idx] + half_width
+            ax.hlines(0.0, x0, x1, colors=edge_color, linewidth=3.0, zorder=5)
+
+        return bp
+    
     def _compute_ylim(
         *data_groups: Sequence[Sequence[np.ndarray]],
         pad_frac: float = 0.05,
@@ -271,7 +365,7 @@ def _visibility_sweep_for_algo(
     # A — standard basis (top-left)
  
     dataA_std = [np.asarray(by_dim_stdA[k], float) for k in dims_sorted]
-    axes1[0, 0].boxplot(dataA_std, whis=(5, 95), showfliers=False)
+    _boxplot_with_zero_floor(axes1[0, 0], dataA_std, whis=(5, 95), showfliers=False)
     axes1[0, 0].set_title("A — Standard basis")
     axes1[0, 0].set_ylabel("Relative error")
     axes1[0, 0].grid(True, axis="y", linestyle="--", alpha=0.6)

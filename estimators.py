@@ -198,7 +198,15 @@ def sindy_fit(
 
     n, T = X.shape
     U_cm = _ensure_channel_major(U, T)
-    X_all = np.hstack([X[:, :1], Xp])
+    # Ensure the samples provided to PySINDy line up with the control inputs.
+    # Previously we stacked ``[x_0, Xp]`` and passed an ``(n, T+1)`` array to
+    # ``model.fit`` while providing only ``T`` control samples.  Newer releases
+    # of PySINDy keep trying to reconcile this mismatch internally, which makes
+    # the optimizer spin forever without producing output.  Feeding the ``T``
+    # state samples directly and supplying the next-step targets via ``x_dot``
+    # keeps the data aligned and avoids the hang.
+    X_samples = X.T      # shape (T, n)
+    X_targets = Xp.T     # shape (T, n)
 
     if feature_library is None:
         feature_library = pysindy.feature_library.PolynomialLibrary(
@@ -217,13 +225,13 @@ def sindy_fit(
         feature_library=feature_library,
         optimizer=optimizer,
     )
-    model.fit(X_all.T, u=U_cm.T, t=dt)
+    model.fit(X_samples, u=U_cm.T, x_dot=X_targets, t=dt)
 
     coef = model.coefficients()
     Ahat = coef[:, :n]
     Bhat = coef[:, n:]
 
-    X_pred = model.predict(X.T, u=U_cm.T)
+    X_pred = model.predict(X_samples, u=U_cm.T)
     recon_mse = float(np.mean((X_pred - Xp.T) ** 2))
     sparsity = float(np.mean(np.abs(coef) > 0))
 
