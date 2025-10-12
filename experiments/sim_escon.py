@@ -181,19 +181,19 @@ def _visibility_sweep_for_algo(
     axes1[0, 0].set_ylabel("Relative error")
     axes1[0, 0].grid(True, axis="y", linestyle="--", alpha=0.6)
 
-    # A — V(x0)-basis (visible block) (bottom-left)
-    dataA_vis = [np.asarray(by_dim_visA[k], float) for k in dims_sorted]
-    axes1[1, 0].boxplot(dataA_vis, whis=(5, 95), showfliers=False)
-    axes1[1, 0].set_title("A — V(x0)-basis (visible)")
+    # B — standard basis (bottom-left)
+    dataB_std = [np.asarray(by_dim_stdB[k], float) for k in dims_sorted]
+    axes1[1, 0].boxplot(dataB_std, whis=(5, 95), showfliers=False)
+    axes1[1, 0].set_title("B — Standard basis")
     axes1[1, 0].set_xlabel("dim $V(x_0)$")
     axes1[1, 0].set_ylabel("Relative error")
     axes1[1, 0].grid(True, axis="y", linestyle="--", alpha=0.6)
     axes1[1, 0].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
 
-    # B — standard basis (top-right)
-    dataB_std = [np.asarray(by_dim_stdB[k], float) for k in dims_sorted]
-    axes1[0, 1].boxplot(dataB_std, whis=(5, 95), showfliers=False)
-    axes1[0, 1].set_title("B — Standard basis")
+    # A — V(x0)-basis (visible block) (top-right)
+    dataA_vis = [np.asarray(by_dim_visA[k], float) for k in dims_sorted]
+    axes1[0, 1].boxplot(dataA_vis, whis=(5, 95), showfliers=False)
+    axes1[0, 1].set_title("A — V(x0)-basis (visible)")
     axes1[0, 1].grid(True, axis="y", linestyle="--", alpha=0.6)
 
     # B — V(x0)-basis (visible block) (bottom-right)
