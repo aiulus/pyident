@@ -275,11 +275,17 @@ def _visibility_sweep_for_algo(
             if not use_bar:
                 continue
 
-            if "boxes" in bp:
-                bp["boxes"][idx].set_visible(False)
-                edge_color = bp["boxes"][idx].get_edgecolor()
-            else:
-                edge_color = None
+            edge_color = None
+            if "boxes" in bp and len(bp["boxes"]) > idx:
+                box_artist = bp["boxes"][idx]
+                box_artist.set_visible(False)
+
+                if hasattr(box_artist, "get_edgecolor"):
+                    edge_color = box_artist.get_edgecolor()
+                elif hasattr(box_artist, "get_color"):
+                    edge_color = box_artist.get_color()
+                elif hasattr(box_artist, "get_facecolor"):
+                    edge_color = box_artist.get_facecolor()
 
             if "medians" in bp:
                 bp["medians"][idx].set_visible(False)
@@ -482,7 +488,7 @@ def _visibility_sweep_for_algo(
 
     # Right: V(x0)-basis unified (visible block)
     uni_vis_data = [np.asarray(by_dim_unified_vis[k], float) for k in dims_sorted]
-    boxplot_with_zero_floor(axes3[1], uni_vis_data, whis=(5, 95), showfliers=False)
+    _boxplot_with_zero_floor(axes3[1], uni_vis_data, whis=(5, 95), showfliers=False)
     axes3[1].set_title(f"{canonical_name}: Unified error (A-B mean) — V(x0)-basis")
     axes3[1].grid(True, axis="y", linestyle="--", alpha=0.6)
 
