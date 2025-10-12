@@ -31,7 +31,7 @@ def _ensure_channel_major(U: np.ndarray, expected_T: int) -> np.ndarray:
     )
 
 
-def node_fit(Xtrain: np.ndarray,
+def node_fit_old(Xtrain: np.ndarray,
              Xp: np.ndarray,
              Utrain: np.ndarray,
              dt: float,
@@ -67,7 +67,7 @@ def node_fit(Xtrain: np.ndarray,
     return A_node, B_node
 
 
-def sindy_fit(X, Xp, U, dt):
+def sindy_fit_old(X, Xp, U, dt):
     n, T = X.shape
     U_cm = _ensure_channel_major(U, T)
     X_all = np.hstack([X[:, :1], Xp])
@@ -93,6 +93,155 @@ def sindy_fit_dt(X, U, dt, degree=1):
     coef = model.coefficients()  # (n, n+m)
     n = X.shape[0]
     return coef[:, :n], coef[:, n:]
+
+class LinearContinuousNODE(torch.nn.Module):
+    """Continuous-time linear NODE with control treated as constant input."""
+
+    def __init__(self, n: int, m: int):
+        super().__init__()
+        self.A = torch.nn.Parameter(torch.zeros(n, n))
+        self.B = torch.nn.Parameter(torch.zeros(n, m))
+
+    def forward(self, t: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+        n = self.A.shape[0]
+        x = z[..., :n]
+        u = z[..., n:]
+        dxdt = x @ self.A.T + u @ self.B.T
+        dudt = torch.zeros_like(u)
+        return torch.cat([dxdt, dudt], dim=-1)
+
+
+def node_fit(
+    Xtrain: np.ndarray,
+    Xp: np.ndarray,
+    Utrain: np.ndarray,
+    dt: float,
+    epochs: int = 200,
+    lr: float = 1e-2,
+    verbose: bool = False,
+    log_every: int = 10,
+    return_history: bool = False,
+    ode_method: str = "rk4",
+):
+    """
+    Train a linear neural ODE using torchdiffeq and return the discretized (A, B).
+
+    Parameters
+    ----------
+    Xtrain, Xp : array_like, shape (n, T)
+        ``Xtrain`` contains states :math:`x_k`; ``Xp`` contains :math:`x_{k+1}`.
+    Utrain : array_like, shape (m, T) or (T, m)
+        Control inputs aligned with ``Xtrain``.
+    dt : float
+        Sample period used for integration.
+    epochs : int
+        Number of Adam steps.
+    lr : float
+        Learning rate for Adam.
+    verbose : bool
+        If True, print the loss every ``log_every`` epochs.
+    log_every : int
+        Interval for logging.
+    return_history : bool
+        If True, also return the per-epoch MSE history as a numpy array.
+    ode_method : str
+        Integration method passed to ``torchdiffeq.odeint``.
+    """
+
+    n, T = Xtrain.shape
+    U_cm = _ensure_channel_major(Utrain, T)
+    m = U_cm.shape[0]
+
+    device = torch.device("cpu")
+    model = LinearContinuousNODE(n, m).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+
+    Xtrain_t = torch.tensor(Xtrain.T, dtype=torch.float32, device=device)
+    Utrain_t = torch.tensor(U_cm.T, dtype=torch.float32, device=device)
+    Xp_t = torch.tensor(Xp.T, dtype=torch.float32, device=device)
+
+    z0 = torch.cat([Xtrain_t, Utrain_t], dim=1)
+    t_eval = torch.tensor([0.0, float(dt)], dtype=torch.float32, device=device)
+
+    history = []
+    for epoch in range(int(epochs)):
+        optimizer.zero_grad()
+        sol = odeint(model, z0, t_eval, method=ode_method)
+        x_pred = sol[-1, :, :n]
+        loss = torch.nn.functional.mse_loss(x_pred, Xp_t)
+        loss.backward()
+        optimizer.step()
+
+        loss_value = float(loss.item())
+        if return_history:
+            history.append(loss_value)
+        if verbose and (epoch % log_every == 0 or epoch == epochs - 1):
+            print(f"[NODE] epoch {epoch:4d}  mse={loss_value:.6e}")
+
+    with torch.no_grad():
+        A_ct = model.A.detach().cpu().numpy()
+        B_ct = model.B.detach().cpu().numpy()
+
+    from .metrics import cont2discrete_zoh
+
+    Ahat, Bhat = cont2discrete_zoh(A_ct, B_ct, float(dt))
+    if return_history:
+        return Ahat, Bhat, np.array(history)
+    return Ahat, Bhat
+
+
+def sindy_fit(
+    X: np.ndarray,
+    Xp: np.ndarray,
+    U: np.ndarray,
+    dt: float,
+    degree: int = 2,
+    optimizer: Optional[object] = None,
+    feature_library: Optional[object] = None,
+    verbose: bool = False,
+    return_diagnostics: bool = False,
+):
+    """Fit a discrete-time SINDy model using PySINDy and log reconstruction error."""
+
+    n, T = X.shape
+    U_cm = _ensure_channel_major(U, T)
+    X_all = np.hstack([X[:, :1], Xp])
+
+    if feature_library is None:
+        feature_library = pysindy.feature_library.PolynomialLibrary(
+            degree=degree, include_bias=False
+        )
+    if optimizer is None:
+        optimizer = pysindy.optimizers.STLSQ()
+
+    model = pysindy.SINDy(
+        discrete_time=True,
+        feature_library=feature_library,
+        optimizer=optimizer,
+    )
+    model.fit(X_all.T, u=U_cm.T, t=dt)
+
+    coef = model.coefficients()
+    Ahat = coef[:, :n]
+    Bhat = coef[:, n:]
+
+    X_pred = model.predict(X.T, u=U_cm.T)
+    recon_mse = float(np.mean((X_pred - Xp.T) ** 2))
+    sparsity = float(np.mean(np.abs(coef) > 0))
+
+    if verbose:
+        print(
+            f"[SINDy] recon_mse={recon_mse:.6e}  coeff_density={sparsity:.3f}"
+        )
+
+    if return_diagnostics:
+        diagnostics = {
+            "reconstruction_mse": recon_mse,
+            "coefficient_density": sparsity,
+        }
+        return Ahat, Bhat, diagnostics
+
+    return Ahat, Bhat
 
 
 # -----------------------------
