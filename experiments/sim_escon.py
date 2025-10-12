@@ -232,7 +232,58 @@ def _visibility_sweep_for_algo(
             max_val = 1e-6
         pad = max(pad_frac * max_val, 1e-8)
         return 0.0, max_val + pad
+    # ---------- Figure 1: A/B — Standard vs V(x0)-basis (visible) ----------
 
+    # Sort visible dimensions in descending order and discard any entries that
+    # ended up without data (e.g., if every trial for a given dimension failed).
+    dims_sorted = []
+    for dim in sorted(dict.fromkeys(dims), reverse=True):
+        if len(by_dim_stdA.get(dim, ())) == 0:
+            continue
+        dims_sorted.append(dim)
+
+    if not dims_sorted:
+        raise RuntimeError(
+            "No successful visibility-sweep trials were recorded; unable to plot results."
+        )
+    fig1, axes1 = plt.subplots(nrows=2, ncols=2, figsize=(12, 6), sharex=True)
+
+    # A — standard basis (top-left)
+ 
+    dataA_std = [np.asarray(by_dim_stdA[k], float) for k in dims_sorted]
+    axes1[0, 0].boxplot(dataA_std, whis=(5, 95), showfliers=False)
+    axes1[0, 0].set_title("A — Standard basis")
+    axes1[0, 0].set_ylabel("Relative error")
+    axes1[0, 0].grid(True, axis="y", linestyle="--", alpha=0.6)
+
+    # B — standard basis (bottom-left)
+    dataB_std = [np.asarray(by_dim_stdB[k], float) for k in dims_sorted]
+    axes1[1, 0].boxplot(dataB_std, whis=(5, 95), showfliers=False)
+    axes1[1, 0].set_title("B — Standard basis")
+    axes1[1, 0].set_xlabel("dim $V(x_0)$")
+    axes1[1, 0].set_ylabel("Relative error")
+    axes1[1, 0].grid(True, axis="y", linestyle="--", alpha=0.6)
+    axes1[1, 0].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
+
+    # A — V(x0)-basis (visible block) (top-right)
+    dataA_vis = [np.asarray(by_dim_visA[k], float) for k in dims_sorted]
+    axes1[0, 1].boxplot(dataA_vis, whis=(5, 95), showfliers=False)
+    axes1[0, 1].set_title("A — V(x0)-basis (visible)")
+    axes1[0, 1].grid(True, axis="y", linestyle="--", alpha=0.6)
+
+    # B — V(x0)-basis (visible block) (bottom-right)
+    dataB_vis = [np.asarray(by_dim_visB[k], float) for k in dims_sorted]
+    axes1[1, 1].boxplot(dataB_vis, whis=(5, 95), showfliers=False)
+    axes1[1, 1].set_title("B — V(x0)-basis (visible)")
+    axes1[1, 1].set_xlabel("dim $V(x_0)$")
+    axes1[1, 1].grid(True, axis="y", linestyle="--", alpha=0.6)
+    axes1[1, 1].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
+
+    fig1.suptitle(f"{canonical_name}: Standard vs V(x0)-basis errors", y=0.98)
+    fig1.tight_layout()
+    fig1.savefig(out_dir / f"vis_sweep_{canonical_name}_std_vs_V.png", dpi=150)
+    plt.close(fig1)
+    
     # ---------- NEW (Figure 2): Axis-aligned A/B comparison (Standard vs V(x0)) ----------
     from matplotlib.lines import Line2D
 
