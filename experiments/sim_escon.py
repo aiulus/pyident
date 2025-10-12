@@ -41,6 +41,24 @@ def _sweep_estimators():
         "NODE":  lambda X0, X1, U_cm, dt: node_fit(X0, X1, U_cm, dt, epochs=200),
     }
 
+def _resolve_algo_name(
+    name: str,
+    available: Mapping[str, Callable[[np.ndarray, np.ndarray, np.ndarray, float], Tuple[np.ndarray, np.ndarray]]],
+) -> str:
+    """Return the canonical estimator name for ``name`` (case-insensitive)."""
+
+    key = name.strip()
+    if not key:
+        raise ValueError("Received an empty algorithm name.")
+
+    lookup = {canonical.lower(): canonical for canonical in available.keys()}
+    resolved = lookup.get(key.lower())
+    if resolved is None:
+        available_names = ", ".join(sorted(available.keys()))
+        raise ValueError(
+            f"Unknown algorithm '{name}'. Available options: {available_names}."
+        )
+    return resolved
 
 # ---------- NEW: PRBS helper ensuring reasonable richness ----------
 def _draw_rich_prbs_for_dim(cfg: EstimatorConsistencyConfig, rng: np.random.Generator, dim_visible: int) -> Tuple[np.ndarray, int]:
@@ -76,9 +94,8 @@ def _visibility_sweep_for_algo(
       2) adapted-basis errors (visible/dark) as boxplots for A and B.
     """
     algos = _sweep_estimators()
-    if algo_name not in algos:
-        raise ValueError(f"Unknown algorithm '{algo_name}'. Available: {list(algos.keys())}")
-    estimator = algos[algo_name]
+    canonical_name = _resolve_algo_name(algo_name, algos)
+    estimator = algos[canonical_name]
 
     n = cfg.n
     if n < 10:
@@ -104,7 +121,7 @@ def _visibility_sweep_for_algo(
 
     for k in dims:
         print(
-            f"[{algo_name}] dim {k}: starting {ensemble_size} trials",
+            f"[{canonical_name}] dim {k}: starting {ensemble_size} trials",
             flush=True,
         )
         progress_step = max(1, ensemble_size // 10)       
@@ -169,12 +186,12 @@ def _visibility_sweep_for_algo(
             count += 1
             if count % progress_step == 0 or count == ensemble_size:
                 print(
-                    f"[{algo_name}] dim {k}: completed {count}/{ensemble_size} trials",
+                    f"[{canonical_name}] dim {k}: completed {count}/{ensemble_size} trials",
                     flush=True,
                 )
 
         print(
-            f"[{algo_name}] dim {k}: finished {ensemble_size} successful trials",
+            f"[{canonical_name}] dim {k}: finished {ensemble_size} successful trials",
             flush=True,
         )
     # ---------- plotting: standard-basis ----------
@@ -219,9 +236,9 @@ def _visibility_sweep_for_algo(
     axes1[1, 1].grid(True, axis="y", linestyle="--", alpha=0.6)
     axes1[1, 1].set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
 
-    fig1.suptitle(f"{algo_name}: Standard vs V(x0)-basis errors", y=0.98)
+    fig1.suptitle(f"{canonical_name}: Standard vs V(x0)-basis errors", y=0.98)
     fig1.tight_layout()
-    fig1.savefig(out_dir / f"vis_sweep_{algo_name}_std_vs_V.png", dpi=150)
+    fig1.savefig(out_dir / f"vis_sweep_{canonical_name}_std_vs_V.png", dpi=150)
     plt.close(fig1)
 
     # ---------- NEW (Figure 2): Axis-aligned A/B comparison (Standard vs V(x0)) ----------
@@ -296,9 +313,9 @@ def _visibility_sweep_for_algo(
     ]
     axes2[1].legend(handles=legend_handles, loc="upper right", frameon=False)
 
-    fig2.suptitle(f"{algo_name}: Axis-aligned Standard vs V(x0) errors", y=0.98)
+    fig2.suptitle(f"{canonical_name}: Axis-aligned Standard vs V(x0) errors", y=0.98)
     fig2.tight_layout()
-    fig2.savefig(out_dir / f"vis_sweep_{algo_name}_std_vs_V_axis_aligned.png", dpi=150)
+    fig2.savefig(out_dir / f"vis_sweep_{canonical_name}_std_vs_V_axis_aligned.png", dpi=150)
     plt.close(fig2)
 
     # ---------- NEW: unified (A-B mean) errors: standard vs V(x0)-basis ----------
@@ -307,14 +324,14 @@ def _visibility_sweep_for_algo(
     # Left: standard basis unified
     uni_std_data = [np.asarray(by_dim_unified_std[k], float) for k in dims_sorted]
     axes3[0].boxplot(uni_std_data, whis=(5, 95), showfliers=False)
-    axes3[0].set_title(f"{algo_name}: Unified error (A-B mean) — Standard basis")
+    axes3[0].set_title(f"{canonical_name}: Unified error (A-B mean) — Standard basis")
     axes3[0].set_ylabel("Relative error (A-B mean)")
     axes3[0].grid(True, axis="y", linestyle="--", alpha=0.6)
 
     # Right: V(x0)-basis unified (visible block)
     uni_vis_data = [np.asarray(by_dim_unified_vis[k], float) for k in dims_sorted]
     axes3[1].boxplot(uni_vis_data, whis=(5, 95), showfliers=False)
-    axes3[1].set_title(f"{algo_name}: Unified error (A-B mean) — V(x0)-basis")
+    axes3[1].set_title(f"{canonical_name}: Unified error (A-B mean) — V(x0)-basis")
     axes3[1].grid(True, axis="y", linestyle="--", alpha=0.6)
 
     # Shared x-ticks
@@ -323,7 +340,7 @@ def _visibility_sweep_for_algo(
         ax.set_xticks(list(range(1, len(dims_sorted) + 1)), [str(k) for k in dims_sorted])
 
     fig3.tight_layout()
-    fig3.savefig(out_dir / f"vis_sweep_{algo_name}_unified.png", dpi=150)
+    fig3.savefig(out_dir / f"vis_sweep_{canonical_name}_unified.png", dpi=150)
     plt.close(fig3)
 
 
@@ -338,11 +355,27 @@ def run_visibility_sweep_plots(
         cfg = EstimatorConsistencyConfig()
     rng = np.random.default_rng(cfg.seed)
 
-    all_algos = list(_sweep_estimators().keys())
-    use_algos = list(algos) if algos is not None else all_algos
+    estimator_map = _sweep_estimators()
+    all_algos = list(estimator_map.keys())
+    if algos is None:
+        use_algos = all_algos
+    else:
+        use_algos = []
+        for name in algos:
+            canonical = _resolve_algo_name(name, estimator_map)
+            if canonical not in use_algos:
+                use_algos.append(canonical)
+
+    if not use_algos:
+        raise ValueError("No valid algorithms requested for the visibility sweep.")
 
     out_dir = out_dir or (cfg.save_dir / "vis_sweep")
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    print(
+        "Running visibility sweep for algorithms: " + ", ".join(use_algos),
+        flush=True,
+    )
 
     for name in use_algos:
         _visibility_sweep_for_algo(cfg, name, rng, ensemble_size=ensemble_size, dims=None, out_dir=out_dir)
@@ -871,7 +904,12 @@ def main() -> None:
 
     if args.vis:
         out_dir = pathlib.Path(args.vis_outdir) if args.vis_outdir else None
-        algos = [s.strip() for s in args.algos.split(",") if s.strip()]
+        algos = []
+        for chunk in args.algos.split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            algos.extend(part for part in chunk.split() if part)
         run_visibility_sweep_plots(cfg, algos=algos, ensemble_size=int(args.vis_ntrials), out_dir=out_dir)
     else:
         # default behavior: run the original experiment
