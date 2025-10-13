@@ -39,7 +39,7 @@ def _sweep_estimators():
         "SINDy": lambda X0, X1, U_cm, dt: sindy_fit(X0, X1, U_cm, dt),
         "MOESP": lambda X0, X1, U_cm, dt: moesp_fit(X0, X1, U_cm),
         "DMDc":  lambda X0, X1, U_cm, dt: dmdc_tls(X0, X1, U_cm),
-        "NODE":  lambda X0, X1, U_cm, dt: node_fit(X0, X1, U_cm, dt, epochs=200),
+        "NODE":  lambda X0, X1, U_cm, dt: node_fit(X0, X1, U_cm, dt, epochs=300),
     }
 
 
@@ -49,7 +49,7 @@ def _enhanced_estimators(cfg: EstimatorConsistencyConfig):
     For ML methods, diagnostics include training details. For others, diagnostics is empty dict.
     """
     def node_with_diagnostics(X0, X1, U_cm, dt):
-        """NODE wrapper that returns diagnostics."""
+        """NODE wrapper that returns diagnostics with modern ML monitoring."""
         result = node_fit(
             X0, X1, U_cm, dt, 
             epochs=cfg.node_epochs,
@@ -58,6 +58,7 @@ def _enhanced_estimators(cfg: EstimatorConsistencyConfig):
             min_delta=cfg.node_min_delta,
             convergence_tol=cfg.node_convergence_tol,
             max_grad_norm=cfg.node_max_grad_norm,
+            early_stopping=cfg.node_early_stopping,
             verbose=False,
             return_diagnostics=True
         )
@@ -611,24 +612,27 @@ class EstimatorConsistencyConfig(ExperimentConfig):
     det: bool = False   # NEW: toggle deterministic Krylov-based x0 construction
     """If True, use Krylov-based construction to hit target dim V(x0) instead of rejection sampling."""
 
-    # NODE-specific hyperparameters
-    node_epochs: int = 200
-    """Maximum number of training epochs for NODE."""
+    # NODE-specific hyperparameters (updated for modern ML practices)
+    node_epochs: int = 300
+    """Maximum number of training epochs for NODE (increased based on convergence analysis)."""
     
     node_lr: float = 1e-2
-    """Learning rate for NODE training."""
+    """Learning rate for NODE training (well-tuned, keeping current value)."""
     
-    node_patience: int = 50
-    """Early stopping patience for NODE."""
+    node_patience: int = 25
+    """Early stopping patience for NODE (reduced for faster detection)."""
     
-    node_min_delta: float = 1e-8
-    """Minimum loss improvement for NODE early stopping."""
+    node_min_delta: float = 1e-6
+    """Minimum loss improvement for NODE early stopping (increased sensitivity)."""
     
-    node_convergence_tol: float = 1e-6
-    """Loss threshold for NODE convergence detection."""
+    node_convergence_tol: float = 1e-5
+    """Loss threshold for NODE convergence detection (practical convergence level)."""
     
-    node_max_grad_norm: float = 1e2
-    """Maximum gradient norm threshold for NODE (current value is appropriate)."""
+    node_max_grad_norm: float = 10.0
+    """Maximum gradient norm for clipping (reduced from 1e2 for stability)."""
+    
+    node_early_stopping: bool = True
+    """Whether to enable early stopping (modern ML practice)."""
 
     save_dir: pathlib.Path = field(default_factory=lambda: pathlib.Path("out_estimator_consistency"))
 

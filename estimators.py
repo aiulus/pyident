@@ -115,11 +115,18 @@ def node_fit(
     Xp: np.ndarray,
     Utrain: np.ndarray,
     dt: float,
-    epochs: int = 200,
+    epochs: int = 300,
     lr: float = 1e-2,
     verbose: bool = True,
     log_every: int = 10,
     return_history: bool = False,
+    return_diagnostics: bool = False,
+    # Modern ML monitoring parameters
+    patience: int = 25,
+    min_delta: float = 1e-6,
+    convergence_tol: float = 1e-5,
+    max_grad_norm: float = 10.0,
+    early_stopping: bool = True,
 ):
     """Train a linear continuous-time NODE and return discretized dynamics.
 
@@ -127,8 +134,51 @@ def node_fit(
     the matrix exponential of the block matrix to obtain discrete-time dynamics
     during training. This keeps the NODE interpretation intact while avoiding the
     heavy per-epoch ODE solves that made the original implementation slow.
+    
+    Parameters
+    ----------
+    Xtrain : np.ndarray
+        Input state data, shape (n, T)
+    Xp : np.ndarray
+        Next state data, shape (n, T)
+    Utrain : np.ndarray
+        Input control data
+    dt : float
+        Time step
+    epochs : int, default=300
+        Maximum number of training epochs (increased from 200)
+    lr : float, default=1e-2
+        Learning rate for Adam optimizer
+    verbose : bool, default=True
+        Whether to print training progress
+    log_every : int, default=10
+        Frequency of progress logging
+    return_history : bool, default=False
+        Whether to return loss history (legacy parameter)
+    return_diagnostics : bool, default=False
+        Whether to return comprehensive training diagnostics
+    patience : int, default=25
+        Early stopping patience (epochs without improvement)
+    min_delta : float, default=1e-6
+        Minimum improvement threshold for early stopping
+    convergence_tol : float, default=1e-5
+        Loss threshold for convergence detection
+    max_grad_norm : float, default=10.0
+        Maximum gradient norm (for gradient clipping)
+    early_stopping : bool, default=True
+        Whether to use early stopping
+        
+    Returns
+    -------
+    Ad : np.ndarray
+        Discrete-time A matrix
+    Bd : np.ndarray
+        Discrete-time B matrix
+    diagnostics : dict, optional
+        Training diagnostics if return_diagnostics=True or return_history=True
     """
-
+    import time
+    
     n, T = Xtrain.shape
     U_cm = _ensure_channel_major(Utrain, T)
     m = U_cm.shape[0]
@@ -145,7 +195,14 @@ def node_fit(
     params = [A_ct, B_ct]
     optimizer = torch.optim.Adam(params, lr=lr)
 
+    # Enhanced training monitoring
+    start_time = time.time()
     history: list[float] = []
+    grad_norms: list[float] = []
+    best_loss = float('inf')
+    patience_counter = 0
+    converged = False
+    early_stopped = False
 
     def _block_matrix() -> torch.Tensor:
         block = torch.zeros((n + m, n + m), dtype=dtype, device=device)
@@ -164,13 +221,53 @@ def node_fit(
         preds = Xk @ Ad.T + Uk @ Bd.T
         loss = torch.nn.functional.mse_loss(preds, Xnext)
         loss.backward()
+        
+        # Gradient monitoring and clipping
+        grad_norm = torch.nn.utils.clip_grad_norm_(params, max_norm=max_grad_norm)
+        grad_norms.append(float(grad_norm))
+        
         optimizer.step()
 
         loss_value = float(loss.item())
-        if return_history:
-            history.append(loss_value)
+        history.append(loss_value)
+        
+        # Convergence detection
+        if loss_value < convergence_tol:
+            converged = True
+            if verbose:
+                print(f"[NODE] ✓ Converged at epoch {epoch}: loss={loss_value:.6e} < tol={convergence_tol:.1e}")
+            break
+            
+        # Early stopping logic
+        if early_stopping:
+            if loss_value < best_loss - min_delta:
+                best_loss = loss_value
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                
+            if patience_counter >= patience:
+                early_stopped = True
+                if verbose:
+                    print(f"[NODE] ⏹ Early stopping at epoch {epoch}: no improvement for {patience} epochs")
+                break
+        
+        # Gradient explosion detection
+        if grad_norm > max_grad_norm:
+            if verbose:
+                print(f"[NODE] ⚠️ High gradient norm at epoch {epoch}: {grad_norm:.3e}")
+        
+        # Progress logging
         if verbose and (epoch % log_every == 0 or epoch == epochs - 1):
-            print(f"[NODE] epoch {epoch:4d}  mse={loss_value:.6e}")
+            improvement_info = ""
+            if epoch > 0:
+                if early_stopping:
+                    improvement_info = f" | best={best_loss:.6e} | patience={patience_counter}/{patience}"
+                
+            print(f"[NODE] epoch {epoch:4d}  mse={loss_value:.6e}  grad_norm={grad_norm:.3e}{improvement_info}")
+
+    training_time = time.time() - start_time
+    epochs_actual = len(history)
 
     with torch.no_grad():
         block = _block_matrix()
@@ -178,8 +275,30 @@ def node_fit(
         Ad = exp_block[:n, :n].cpu().numpy()
         Bd = exp_block[:n, n:].cpu().numpy()
 
-    if return_history:
-        return Ad, Bd, np.array(history)
+    # Enhanced diagnostics
+    if return_diagnostics or return_history:
+        diagnostics = {
+            'loss_history': np.array(history),
+            'grad_norm_history': np.array(grad_norms),
+            'final_loss': history[-1] if history else float('inf'),
+            'best_loss': best_loss,
+            'epochs_actual': epochs_actual,
+            'epochs_requested': epochs,
+            'converged': converged,
+            'early_stopped': early_stopped,
+            'training_time_s': training_time,
+            'convergence_rate': -np.log(history[-1] / history[0]) / epochs_actual if len(history) > 1 and history[0] > 0 else 0.0,
+            'hyperparameters': {
+                'lr': lr,
+                'patience': patience,
+                'min_delta': min_delta,
+                'convergence_tol': convergence_tol,
+                'max_grad_norm': max_grad_norm,
+                'early_stopping': early_stopping,
+            }
+        }
+        return Ad, Bd, diagnostics
+    
     return Ad, Bd
 
 
