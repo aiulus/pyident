@@ -34,14 +34,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from ..tests.conftest import horizon
-
 from ..config import ExperimentConfig
 from ..estimators import dmdc_tls
 from ..metrics import projected_errors, build_visible_basis_dt
 from ..signals import estimate_moment_pe_order, estimate_pe_order
 from ..simulation import prbs, simulate_dt
 from .visible_sampling import VisibleDrawConfig, draw_system_state_with_visible_dim
+from .interpretation_aids import create_theory_validation_plots
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +54,7 @@ class PEVisibleConfig(ExperimentConfig):
     n: int = 5
     visible_dim: int = 3
     m: int = 2
-    T: int = 200
+    T: int = 200  # Fixed horizon for all PE orders
     dt: float = 0.1
     dwell: int = 1
     u_scale: float = 3.0
@@ -63,7 +62,7 @@ class PEVisibleConfig(ExperimentConfig):
 
     pe_orders: Sequence[int] = tuple(range(1, 11))
     ntrials: int = 25
-    T_padding: int = 10
+    n_systems: int = 100  # Number of systems per scenario
     T_min: int = 0
     max_system_attempts: int = 500
     max_x0_attempts: int = 256
@@ -72,6 +71,7 @@ class PEVisibleConfig(ExperimentConfig):
     outdir: str = "out_pe_vs_visible"
     deterministic_x0: bool = False
     enforce_exact_block_pe: bool = True
+    enhanced_plots: bool = False
 
     def __post_init__(self) -> None:  # type: ignore[override]
         super().__post_init__()
@@ -83,8 +83,6 @@ class PEVisibleConfig(ExperimentConfig):
             raise ValueError("pe_orders must be positive integers.")
         if self.T_min < 0:
             raise ValueError("T_min must be non-negative.")
-        if self.T_padding < 0:
-            raise ValueError("T_padding must be non-negative.")
         if self.max_x0_attempts <= 0:
             raise ValueError("max_x0_attempts must be positive.")
         if not 0 < self.visible_dim <= self.n:
@@ -95,12 +93,29 @@ class PEVisibleConfig(ExperimentConfig):
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _create_system_dict(
+    A: np.ndarray, B: np.ndarray, Ad: np.ndarray, Bd: np.ndarray, 
+    x0: np.ndarray, P: np.ndarray, dim_visible: int, system_id: int
+) -> Dict[str, float | int | np.ndarray]:
+    """Create a system dictionary with proper typing."""
+    return {
+        "A": A, "B": B, "Ad": Ad, "Bd": Bd, "x0": x0, "P": P,
+        "dim_visible": dim_visible, "system_id": system_id
+    }
+
 def _draw_system_with_visible_dim(
     cfg: PEVisibleConfig,
     target_dim: int,
     rng: np.random.Generator,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Draw (A, B, Ad, Bd, x0, P) with dim span(P) == target_dim."""
+    """Draw (A, B, Ad, Bd, x0, P) with dim span(P) == target_dim.
+    
+    Note: The visible basis P is computed in discrete time using (Ad, Bd, x0).
+    While the theoretical framework develops V(x0) for continuous-time systems,
+    we use the discretized version for practical computation. For stable systems
+    with reasonable dt, these subspaces typically align, but near-aliasing effects
+    could create mild degeneracies at specific dt values.
+    """
 
     draw_cfg = VisibleDrawConfig(
         n=cfg.n,
@@ -126,13 +141,15 @@ def _draw_system_with_visible_dim(
 
 
 def _horizon_for_order(order: int, cfg: PEVisibleConfig) -> int:
-    """Choose T so H_r can be full row rank but H_{r+1} cannot (in principle)."""
+    """Use fixed T from config, but check if it's sufficient for target PE order."""
     # Full row rank at depth r requires T >= m*r + r - 1
     T_needed = cfg.m * order + order - 1
-    if cfg.enforce_exact_block_pe:
-        return T_needed
-    # Keep an optional lower bound if you really need it; default it to 0.
-    return max(cfg.T_min, T_needed)
+    if cfg.T < T_needed:
+        raise ValueError(
+            f"Fixed horizon T={cfg.T} is insufficient for PE order {order}. "
+            f"Need at least T >= {T_needed} = m*r + r - 1."
+        )
+    return cfg.T
 
 def _make_prbs_with_order(
     order: int,
@@ -140,15 +157,24 @@ def _make_prbs_with_order(
     rng: np.random.Generator,
     max_tries: int = 20,
 ) -> Tuple[np.ndarray, int]:
-    """Draw a PRBS sequence that achieves the requested block-PE order."""
+    """Draw a PRBS sequence that achieves the requested block-PE order with normalized energy."""
 
     T = _horizon_for_order(order, cfg)
     best_U: np.ndarray | None = None
     best_r: int = -1
     best_score: Tuple[int, int, int] | None = None
+    
+    # Target energy for normalization (based on u_scale and T)
+    target_energy = float(cfg.u_scale**2 * T * cfg.m)
 
     for _ in range(max_tries):
         U = prbs(T, cfg.m, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
+        
+        # Normalize to constant total energy
+        current_energy = float(np.sum(U**2))
+        if current_energy > 0:
+            U = U * np.sqrt(target_energy / current_energy)
+        
         r = int(estimate_pe_order(U, s_max=order))
         r_plus = int(estimate_pe_order(U, s_max=order + 1))
         if r == order and r_plus < order + 1:
@@ -164,7 +190,14 @@ def _make_prbs_with_order(
     if best_U is None:
         best_U = prbs(T, cfg.m, scale=cfg.u_scale, dwell=cfg.dwell, rng=rng)
         best_r = int(estimate_pe_order(best_U, s_max=order))
-    return best_U, best_r
+    
+    # Apply energy normalization to final result
+    final_U = best_U  # Type narrowing
+    current_energy = float(np.sum(final_U**2))
+    if current_energy > 0:
+        final_U = final_U * np.sqrt(target_energy / current_energy)
+    
+    return final_U, best_r
 
 
 def _relative_norm(err: float, ref: float, eps: float) -> float:
@@ -223,6 +256,109 @@ def _plot_standard_by_visibility(
     fig.savefig(outfile, dpi=160)
     plt.close(fig)
 
+
+def _plot_markov_parameters(
+    df: pd.DataFrame,
+    cfg: PEVisibleConfig,
+    outfile: pathlib.Path,
+) -> None:
+    """Plot Markov parameter errors vs moment-PE order for direct theoretical validation."""
+    outfile.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Create subplots for each Markov parameter order k
+    n_params = min(cfg.n, 6)  # Limit to first 6 for readability
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10), sharex=True)
+    axes = axes.flat
+    
+    for k in range(n_params):
+        ax = axes[k]
+        markov_col = f"markov_err_{k}"
+        
+        if markov_col not in df.columns:
+            continue
+            
+        for scenario, linestyle, color in [("partial", "-", "C0"), ("full", "--", "C1")]:
+            sub = df[df["scenario"] == scenario]
+            if sub.empty:
+                continue
+            grouped = sub.set_index("pe_order_moment")[markov_col]
+            orders, med, q1, q3 = _aggregate_stat(grouped)
+            ax.plot(orders, med, linestyle=linestyle, color=color, label=scenario if k == 0 else "")
+            ax.fill_between(orders, q1, q3, color=color, alpha=0.2)
+        
+        ax.set_title(f"E_{k} = ||Â^{k}B̂ - A^{k}B||_F")
+        ax.set_ylabel("Markov parameter error")
+        ax.grid(True, alpha=0.3)
+        
+        # Add vertical line at k+1 (theoretical threshold)
+        ax.axvline(k + 1, color="red", linestyle=":", linewidth=1.5, alpha=0.7)
+        if k == 0:
+            ax.text(k + 1.1, ax.get_ylim()[1] * 0.9, f"r={k+1}", rotation=90, 
+                   verticalalignment='top', color="red", fontsize=10)
+    
+    # Hide unused subplots
+    for k in range(n_params, len(axes)):
+        axes[k].set_visible(False)
+    
+    # Common x-label
+    for ax in axes[-3:]:
+        ax.set_xlabel("Moment-PE order")
+    
+    axes[0].legend(title="Scenario")
+    fig.suptitle("Markov Parameter Errors vs Moment-PE Order (Theory: E_k ↓ when r > k)")
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.savefig(outfile, dpi=160)
+    plt.close(fig)
+
+def _plot_subspace_errors(
+    df: pd.DataFrame, 
+    cfg: PEVisibleConfig,
+    outfile: pathlib.Path,
+) -> None:
+    """Plot subspace-resolved errors to show ceiling effect."""
+    outfile.parent.mkdir(parents=True, exist_ok=True)
+    
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10), sharex=True)
+    
+    # Top row: A errors on V(x0) and V(x0)⊥
+    # Bottom row: B errors on V(x0) and V(x0)⊥
+    metrics = [
+        ("errA_V_subspace_rel", "A errors on V(x₀)", 0, 0),
+        ("errA_Vperp_subspace_rel", "A errors on V(x₀)⊥", 0, 1), 
+        ("errB_V_subspace_rel", "B errors on V(x₀)", 1, 0),
+        ("errB_Vperp_subspace_rel", "B errors on V(x₀)⊥", 1, 1),
+    ]
+    
+    for col, title, row, column in metrics:
+        ax = axes[row, column]
+        
+        for scenario, linestyle, color in [("partial", "-", "C0"), ("full", "--", "C1")]:
+            sub = df[df["scenario"] == scenario]
+            if sub.empty or col not in df.columns:
+                continue
+            grouped = sub.set_index("pe_order_actual")[col]
+            orders, med, q1, q3 = _aggregate_stat(grouped)
+            ax.plot(orders, med, linestyle=linestyle, color=color, label=scenario)
+            ax.fill_between(orders, q1, q3, color=color, alpha=0.2)
+        
+        ax.set_title(title)
+        ax.set_ylabel("Relative error")
+        ax.grid(True, alpha=0.3)
+        
+        # Add vertical lines for visible dimensions
+        if "V(x₀)⊥" not in title:  # Only for V(x0) subspace
+            ax.axvline(cfg.visible_dim, color="C0", linestyle=":", label=f"k={cfg.visible_dim} (partial)")
+            ax.axvline(cfg.n, color="C1", linestyle="-.", label=f"k={cfg.n} (full)")
+    
+    # Set common x-labels
+    axes[1, 0].set_xlabel("PE order")
+    axes[1, 1].set_xlabel("PE order")
+    
+    axes[0, 0].legend(title="Scenario")
+    fig.suptitle("Subspace-Resolved Errors (Ceiling Effect: V(x₀) improves, V(x₀)⊥ stays high)")
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.savefig(outfile, dpi=160)
+    plt.close(fig)
 
 def _plot_summary(
     df: pd.DataFrame,
@@ -286,15 +422,20 @@ def _run_trial(
     pe_target: int,
     pe_actual: int,
     pe_moment: int,
-    system: Dict[str, np.ndarray],
+    system: Dict[str, float | int | np.ndarray],
     cfg: PEVisibleConfig,
 ):
     """Simulate and identify for one scenario."""
 
+    # Extract arrays with type assertions
     x0 = system["x0"]
-    Ad = system["Ad"]
+    Ad = system["Ad"] 
     Bd = system["Bd"]
     P = system["P"]
+    assert isinstance(x0, np.ndarray)
+    assert isinstance(Ad, np.ndarray)
+    assert isinstance(Bd, np.ndarray) 
+    assert isinstance(P, np.ndarray)
 
     X = simulate_dt(x0, Ad, Bd, U, noise_std=cfg.noise_std)
     X0, X1 = X[:, :-1], X[:, 1:]
@@ -309,6 +450,75 @@ def _run_trial(
     dA_V, dB_V = projected_errors(Ahat, Bhat, Ad, Bd, Q)
     A_vis = float(np.linalg.norm(Q.T @ Ad @ Q, ord="fro"))
     B_vis = float(np.linalg.norm(Q.T @ Bd, ord="fro"))
+    
+    # Check for small denominators and add robustness
+    A_vis_safe = max(A_vis, cfg.eps_norm)
+    B_vis_safe = max(B_vis, cfg.eps_norm)
+    
+    # Compute Markov parameter errors E_k = ||Â^k B̂ - A^k B||_F for k = 0..n-1
+    markov_errors = {}
+    A_power = np.eye(cfg.n)  # A^0
+    Ahat_power = np.eye(cfg.n)  # Â^0
+    
+    for k in range(cfg.n):
+        true_markov = A_power @ Bd  # A^k @ B
+        est_markov = Ahat_power @ Bhat  # Â^k @ B̂
+        markov_err = float(np.linalg.norm(est_markov - true_markov, ord="fro"))
+        markov_errors[f"markov_err_{k}"] = markov_err
+        
+        # Update powers for next iteration
+        if k < cfg.n - 1:  # Don't compute beyond what we need
+            A_power = A_power @ Ad
+            Ahat_power = Ahat_power @ Ahat
+    
+    # Compute subspace-resolved errors: V(x0) vs V(x0)⊥ (ceiling effect)
+    # Q columns span V(x0), so Q⊥ spans V(x0)⊥
+    dim_V = Q.shape[1]
+    
+    # Create orthogonal complement basis Q_perp for V(x0)⊥
+    if dim_V < cfg.n:
+        # Complete Q to full orthogonal basis
+        Q_full, _ = np.linalg.qr(np.hstack([Q, np.random.randn(cfg.n, cfg.n - dim_V)]))
+        Q_perp = Q_full[:, dim_V:]  # Orthogonal complement
+    else:
+        # If V(x0) = R^n, there's no orthogonal complement
+        Q_perp = np.zeros((cfg.n, 0))
+    
+    # Compute errors restricted to each subspace
+    A_err = Ahat - Ad
+    B_err = Bhat - Bd
+    
+    # Error on V(x0): ||(Â-A)|_V||_F = ||Q^T(Â-A)Q||_F  
+    A_err_V = Q.T @ A_err @ Q
+    errA_V_subspace = float(np.linalg.norm(A_err_V, ord="fro"))
+    
+    # Error on V(x0)⊥: ||(Â-A)|_{V⊥}||_F = ||Q_⊥^T(Â-A)Q_⊥||_F
+    if Q_perp.shape[1] > 0:
+        A_err_Vperp = Q_perp.T @ A_err @ Q_perp
+        errA_Vperp_subspace = float(np.linalg.norm(A_err_Vperp, ord="fro"))
+    else:
+        errA_Vperp_subspace = 0.0
+    
+    # B errors on subspaces: ||Q^T(B̂-B)||_F and ||Q_⊥^T(B̂-B)||_F
+    B_err_V = Q.T @ B_err
+    errB_V_subspace = float(np.linalg.norm(B_err_V, ord="fro"))
+    
+    if Q_perp.shape[1] > 0:
+        B_err_Vperp = Q_perp.T @ B_err
+        errB_Vperp_subspace = float(np.linalg.norm(B_err_Vperp, ord="fro"))
+    else:
+        errB_Vperp_subspace = 0.0
+    
+    # Relative versions (for normalization)
+    A_V_norm_subspace = float(np.linalg.norm(Q.T @ Ad @ Q, ord="fro"))
+    B_V_norm_subspace = float(np.linalg.norm(Q.T @ Bd, ord="fro"))
+    
+    if Q_perp.shape[1] > 0:
+        A_Vperp_norm_subspace = float(np.linalg.norm(Q_perp.T @ Ad @ Q_perp, ord="fro"))
+        B_Vperp_norm_subspace = float(np.linalg.norm(Q_perp.T @ Bd, ord="fro"))
+    else:
+        A_Vperp_norm_subspace = 0.0
+        B_Vperp_norm_subspace = 0.0
 
     return {
         "scenario": label,
@@ -317,10 +527,28 @@ def _run_trial(
         "pe_order_moment": pe_moment,
         "errA_rel": _relative_norm(errA, normA, cfg.eps_norm),
         "errB_rel": _relative_norm(errB, normB, cfg.eps_norm),
-        "errA_V_rel": _relative_norm(dA_V, A_vis, cfg.eps_norm),
-        "errB_V_rel": _relative_norm(dB_V, B_vis, cfg.eps_norm),
+        "errA_V_abs": float(dA_V),
+        "errB_V_abs": float(dB_V),
+        "errA_V_rel": _relative_norm(dA_V, A_vis_safe, cfg.eps_norm),
+        "errB_V_rel": _relative_norm(dB_V, B_vis_safe, cfg.eps_norm),
+        "A_vis_norm": A_vis,
+        "B_vis_norm": B_vis,
         "dim_visible": system["dim_visible"],
         "T": U.shape[0],
+        # Subspace-resolved errors (ceiling effect)
+        "errA_V_subspace_abs": errA_V_subspace,
+        "errB_V_subspace_abs": errB_V_subspace,  
+        "errA_Vperp_subspace_abs": errA_Vperp_subspace,
+        "errB_Vperp_subspace_abs": errB_Vperp_subspace,
+        "errA_V_subspace_rel": _relative_norm(errA_V_subspace, A_V_norm_subspace, cfg.eps_norm),
+        "errB_V_subspace_rel": _relative_norm(errB_V_subspace, B_V_norm_subspace, cfg.eps_norm),
+        "errA_Vperp_subspace_rel": _relative_norm(errA_Vperp_subspace, A_Vperp_norm_subspace, cfg.eps_norm),
+        "errB_Vperp_subspace_rel": _relative_norm(errB_Vperp_subspace, B_Vperp_norm_subspace, cfg.eps_norm),
+        "A_V_norm_subspace": A_V_norm_subspace,
+        "B_V_norm_subspace": B_V_norm_subspace,
+        "A_Vperp_norm_subspace": A_Vperp_norm_subspace,
+        "B_Vperp_norm_subspace": B_Vperp_norm_subspace,
+        **markov_errors,  # Add all markov_err_0, markov_err_1, ..., markov_err_{n-1}
     }
 
 
@@ -331,27 +559,48 @@ def run_experiment(cfg: PEVisibleConfig) -> pd.DataFrame:
     sys_rng = np.random.default_rng(base_rng.integers(0, 2**32))
     input_rng = np.random.default_rng(base_rng.integers(0, 2**32))
 
-    # Draw systems for the partially visible and fully visible scenarios.
-    partial = {}
-    partial_keys = ("A", "B", "Ad", "Bd", "x0", "P")
-    values = _draw_system_with_visible_dim(cfg, target_dim=cfg.visible_dim, rng=sys_rng)
-    partial.update(dict(zip(partial_keys, values)))
-    partial["dim_visible"] = cfg.visible_dim
+    # Draw multiple systems for each scenario (reused across all PE orders)
+    print(f"Drawing {cfg.n_systems} systems for each scenario...")
+    
+    partial_systems = []
+    for i in range(cfg.n_systems):
+        A, B, Ad, Bd, x0, P = _draw_system_with_visible_dim(cfg, target_dim=cfg.visible_dim, rng=sys_rng)
+        system = _create_system_dict(A, B, Ad, Bd, x0, P, cfg.visible_dim, i)
+        partial_systems.append(system)
+        if (i + 1) % 20 == 0:
+            print(f"  Partial systems: {i + 1}/{cfg.n_systems}")
 
-    full = {}
-    values = _draw_system_with_visible_dim(cfg, target_dim=cfg.n, rng=sys_rng)
-    full.update(dict(zip(partial_keys, values)))
-    full["dim_visible"] = cfg.n
+    full_systems = []
+    for i in range(cfg.n_systems):
+        A, B, Ad, Bd, x0, P = _draw_system_with_visible_dim(cfg, target_dim=cfg.n, rng=sys_rng)
+        system = _create_system_dict(A, B, Ad, Bd, x0, P, cfg.n, i)
+        full_systems.append(system)
+        if (i + 1) % 20 == 0:
+            print(f"  Full systems: {i + 1}/{cfg.n_systems}")
 
     records: List[Dict[str, float]] = []
     max_order = max(cfg.pe_orders)
 
+    print("Running experiments...")
     for order in cfg.pe_orders:
+        print(f"  PE order {order}:")
         for trial in range(cfg.ntrials):
             U, pe_block = _make_prbs_with_order(order, cfg, input_rng)
             pe_moment = int(estimate_moment_pe_order(U, r_max=max_order, dt=cfg.dt))
-            records.append(_run_trial("partial", U, order, pe_block, pe_moment, partial, cfg))
-            records.append(_run_trial("full", U, order, pe_block, pe_moment, full, cfg))
+            
+            # Run trials on all systems for this PE order and input
+            for sys_partial in partial_systems:
+                result = _run_trial("partial", U, order, pe_block, pe_moment, sys_partial, cfg)
+                result["system_id"] = sys_partial["system_id"]
+                records.append(result)
+                
+            for sys_full in full_systems:
+                result = _run_trial("full", U, order, pe_block, pe_moment, sys_full, cfg)
+                result["system_id"] = sys_full["system_id"]
+                records.append(result)
+                
+            if (trial + 1) % 5 == 0:
+                print(f"    Trial {trial + 1}/{cfg.ntrials}")
 
     df = pd.DataFrame.from_records(records)
 
@@ -381,7 +630,14 @@ def run_experiment(cfg: PEVisibleConfig) -> pd.DataFrame:
         x_col="pe_order_actual",
         xlabel="Estimated block-PE order (Hankel)",
     )
-
+    
+    # New theory-focused plots
+    _plot_markov_parameters(df, cfg, outdir / "pe_vs_visible_markov_parameters.png")
+    _plot_subspace_errors(df, cfg, outdir / "pe_vs_visible_subspace_ceiling_effect.png")
+    
+    # Enhanced interpretation aids (optional)
+    if cfg.enhanced_plots:
+        create_theory_validation_plots(df, cfg, outdir)
 
     return df
 
@@ -396,8 +652,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     
     # Basic experiment parameters
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
-    parser.add_argument("--ntrials", type=int, default=25, help="Number of trials per PE order")
+    parser.add_argument("--ntrials", "--n-trials", type=int, default=25, help="Number of trials per PE order")
+    parser.add_argument("--n-systems", type=int, default=100, help="Number of systems per scenario")
     parser.add_argument("--outdir", type=str, default="out_pe_vs_visible", help="Output directory")
+    parser.add_argument("--output-prefix", type=str, help="Output file prefix (alternative to --outdir)")
     
     # System dimensions
     parser.add_argument("--n", type=int, default=5, help="State dimension for the system")
@@ -405,7 +663,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--m", type=int, default=2, help="Input dimension")
     
     # Simulation parameters
-    parser.add_argument("--T", type=int, default=200, help="Simulation horizon length")
+    parser.add_argument("--T", type=int, default=200, help="Fixed simulation horizon length for all PE orders")
     parser.add_argument("--dt", type=float, default=0.1, help="Discretization time step")
     parser.add_argument("--dwell", type=int, default=1, help="PRBS dwell time")
     parser.add_argument("--u-scale", type=float, default=3.0, help="Input scaling factor")
@@ -414,9 +672,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     # PE order configuration
     parser.add_argument("--pe-orders", type=str, default="1,2,3,4,5,6,7,8,9,10", 
                         help="Comma-separated list of PE orders to test")
+    parser.add_argument("--max-pe-order", type=int, help="Maximum PE order (generates range 1 to max-pe-order)")
     
     # Algorithm parameters
-    parser.add_argument("--T-padding", type=int, default=10, help="Additional horizon padding")
     parser.add_argument("--T-min", type=int, default=0, help="Minimum horizon length")
     parser.add_argument("--max-system-attempts", type=int, default=500, help="Maximum attempts to draw suitable system")
     parser.add_argument("--max-x0-attempts", type=int, default=256, help="Maximum attempts to draw suitable initial state")
@@ -427,17 +685,30 @@ def main(argv: Sequence[str] | None = None) -> None:
     
     # Behavioral flags
     parser.add_argument("--det", action="store_true", help="Use deterministic x0 construction")
-    parser.add_argument("--exact-pe", action="store_true", default=True, help="Enforce exact block PE order")
+    parser.add_argument("--exact-pe", dest="exact_pe", action="store_true", default=True, help="Enforce exact block PE order")
+    parser.add_argument("--no-exact-pe", dest="exact_pe", action="store_false", help="Disable exact block PE order enforcement")
+    parser.add_argument("--enhanced-plots", action="store_true", help="Generate enhanced interpretation dashboard and statistical tests")
     
     args = parser.parse_args(argv)
     
-    # Parse PE orders from comma-separated string
-    pe_orders = tuple(int(x.strip()) for x in args.pe_orders.split(",") if x.strip())
+    # Handle --max-pe-order vs --pe-orders
+    if args.max_pe_order is not None:
+        pe_orders = tuple(range(1, args.max_pe_order + 1))
+    else:
+        # Parse PE orders from comma-separated string
+        pe_orders = tuple(int(x.strip()) for x in args.pe_orders.split(",") if x.strip())
+    
+    # Handle --output-prefix vs --outdir  
+    if args.output_prefix is not None:
+        outdir = args.output_prefix
+    else:
+        outdir = args.outdir
 
     cfg = PEVisibleConfig(
         seed=args.seed,
         ntrials=args.ntrials,
-        outdir=args.outdir,
+        n_systems=args.n_systems,
+        outdir=outdir,
         n=args.n,
         visible_dim=args.vdim,
         m=args.m,
@@ -447,7 +718,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         u_scale=args.u_scale,
         noise_std=args.noise_std,
         pe_orders=pe_orders,
-        T_padding=args.T_padding,
         T_min=args.T_min,
         max_system_attempts=args.max_system_attempts,
         max_x0_attempts=args.max_x0_attempts,
@@ -455,6 +725,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         eps_norm=args.eps_norm,
         deterministic_x0=args.det,
         enforce_exact_block_pe=args.exact_pe,
+        enhanced_plots=args.enhanced_plots,
     )
 
     df = run_experiment(cfg)
