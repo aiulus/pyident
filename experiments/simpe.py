@@ -2,8 +2,8 @@
 
 This experiment follows the workflow described in the user request:
 
-1. Build two ensembles of (A, B, x0) triples with prescribed visible
-   subspace dimensions (one equal to ``n`` and one equal to a target dim).
+1. Build ensembles of (A, B, x0) triples with prescribed visible
+   subspace dimensions (one ensemble per requested target dimension).
 2. Generate ensembles of persistently exciting input signals with *exact*
    block-PE order drawn from ``--peorders`` using either PRBS or multisine
    generators.
@@ -70,7 +70,7 @@ class IdentifiabilityConfig:
     m: int = 2
     dt: float = 0.05
     ntrials: int = 200
-    target_visible: int = 3
+    target_visibles: Tuple[int, ...] = (3,)
     seed: int = 0
     peorders: Sequence[int] = dataclasses.field(default_factory=lambda: tuple(range(1, 6)))
     sigtype: str = "prbs"
@@ -80,6 +80,7 @@ class IdentifiabilityConfig:
     max_signal_tries: int = 512
     moesp_s: int | None = None
     csv_name: str = "ree_results.csv"
+    trajectory_length: int | None = None
 
     # Visible subspace draw controls
     max_system_attempts: int = 256
@@ -89,8 +90,12 @@ class IdentifiabilityConfig:
     def __post_init__(self) -> None:
         if self.n <= 0 or self.m <= 0:
             raise ValueError("n and m must be positive integers.")
-        if self.target_visible <= 0 or self.target_visible > self.n:
-            raise ValueError("target_visible must satisfy 1 <= target_visible <= n.")
+        if not self.target_visibles:
+            raise ValueError("At least one target_visible must be provided.")
+        unique = tuple(dict.fromkeys(int(tv) for tv in self.target_visibles))
+        if any(tv <= 0 or tv > self.n for tv in unique):
+            raise ValueError("target_visible values must satisfy 1 <= target_visible <= n.")
+        object.__setattr__(self, "target_visibles", unique)
         if self.ntrials <= 0:
             raise ValueError("ntrials must be positive.")
         if not self.peorders:
@@ -100,6 +105,15 @@ class IdentifiabilityConfig:
         if self.sigtype not in {"prbs", "multisine"}:
             raise ValueError("sigtype must be 'prbs' or 'multisine'.")
         self.algos = tuple(a.lower() for a in self.algos)
+        if self.trajectory_length is not None:
+            if self.trajectory_length <= 0:
+                raise ValueError("trajectory_length must be a positive integer when provided.")
+            min_required = max(_minimal_horizon(order, self.m) for order in self.peorders)
+            if self.trajectory_length < min_required:
+                raise ValueError(
+                    "trajectory_length must be at least the minimal horizon required "
+                    f"for the requested PE orders ({min_required})."
+                )
 
 
 def _minimal_horizon(order: int, m: int) -> int:
@@ -118,8 +132,9 @@ def _check_exact_order(U: np.ndarray, order: int) -> bool:
     return r_plus < order + 1
 
 
-def _draw_prbs_exact(order: int, m: int, rng: np.random.Generator, max_tries: int) -> np.ndarray:
-    T = _minimal_horizon(order, m)
+def _draw_prbs_exact(
+    order: int, m: int, rng: np.random.Generator, max_tries: int, T: int
+) -> np.ndarray:
     period = max(2, 2 * order)
     for _ in range(max_tries):
         U = prbs_signal(T, m, rng, period=period)
@@ -130,8 +145,9 @@ def _draw_prbs_exact(order: int, m: int, rng: np.random.Generator, max_tries: in
     )
 
 
-def _draw_multisine_exact(order: int, m: int, rng: np.random.Generator, max_tries: int) -> np.ndarray:
-    T = _minimal_horizon(order, m)
+def _draw_multisine_exact(
+    order: int, m: int, rng: np.random.Generator, max_tries: int, T: int
+) -> np.ndarray:
     k_lines = max(4, min(T // 2, order * m))
     for _ in range(max_tries):
         U = multisine_signal(T, m, rng, k_lines=k_lines)
@@ -142,10 +158,18 @@ def _draw_multisine_exact(order: int, m: int, rng: np.random.Generator, max_trie
     )
 
 
+def _resolve_horizon(order: int, cfg: IdentifiabilityConfig) -> int:
+    T_min = _minimal_horizon(order, cfg.m)
+    if cfg.trajectory_length is None:
+        return T_min
+    return cfg.trajectory_length
+
+
 def generate_signal(order: int, cfg: IdentifiabilityConfig, rng: np.random.Generator) -> np.ndarray:
+    T = _resolve_horizon(order, cfg)
     if cfg.sigtype == "prbs":
-        return _draw_prbs_exact(order, cfg.m, rng, cfg.max_signal_tries)
-    return _draw_multisine_exact(order, cfg.m, rng, cfg.max_signal_tries)
+        return _draw_prbs_exact(order, cfg.m, rng, cfg.max_signal_tries, T)
+    return _draw_multisine_exact(order, cfg.m, rng, cfg.max_signal_tries, T)
 
 
 def _relative_estimation_error(A: np.ndarray, B: np.ndarray, Ahat: np.ndarray, Bhat: np.ndarray) -> float:
@@ -216,8 +240,11 @@ def _draw_systems(cfg: IdentifiabilityConfig, target_dim: int, rng: np.random.Ge
 def run_experiment(cfg: IdentifiabilityConfig) -> pd.DataFrame:
     rng = np.random.default_rng(cfg.seed)
 
-    visible_target = _draw_systems(cfg, cfg.target_visible, rng)
-    visible_full = _draw_systems(cfg, cfg.n, rng)
+    scenario_systems: List[Tuple[str, List[Dict[str, np.ndarray]]]] = []
+    for target_dim in cfg.target_visibles:
+        label = f"dim(V(x0))={target_dim}"
+        systems = _draw_systems(cfg, target_dim, rng)
+        scenario_systems.append((label, systems))
 
     estimator_map = _available_estimators(cfg)
     missing = [a for a in cfg.algos if a not in estimator_map]
@@ -230,10 +257,11 @@ def run_experiment(cfg: IdentifiabilityConfig) -> pd.DataFrame:
     for order in sorted(set(cfg.peorders)):
         signals[order] = generate_signal(order, cfg, rng)
 
-    combos: Iterable[Tuple[str, Dict[str, np.ndarray]]] = (
-        [("target", sys) for sys in visible_target]
-        + [("full", sys) for sys in visible_full]
-    )
+    combos: Iterable[Tuple[str, Dict[str, np.ndarray]]] = [
+        (scenario, sys)
+        for scenario, systems in scenario_systems
+        for sys in systems
+    ]
 
     for scenario, sys in combos:
         A = sys["A"]
@@ -282,17 +310,36 @@ def _plot_group(df: pd.DataFrame, scenario: str, outpath: str) -> None:
 
     grouped = (
         subset.groupby(["algo", "pe_order"])  # type: ignore[arg-type]
-        ["ree"].median()
+        ["ree"]
+        .agg(["mean", "std", "median"])
         .reset_index()
     )
 
     plt.figure(figsize=(6.4, 4.8))
     for algo in sorted(subset["algo"].unique()):
-        series = grouped[grouped["algo"] == algo]
-        plt.plot(series["pe_order"], series["ree"], marker="o", label=algo.upper())
+        series = grouped[grouped["algo"] == algo].sort_values("pe_order")
+        mean = series["mean"].to_numpy()
+        std = series["std"].fillna(0.0).to_numpy()
+        lower = np.clip(mean - std, a_min=0.0, a_max=None)
+        upper = mean + std
+        plt.plot(series["pe_order"], mean, marker="o", label=f"{algo.upper()} mean")
+        plt.fill_between(
+            series["pe_order"],
+            lower,
+            upper,
+            alpha=0.2,
+            label=f"{algo.upper()} ±1σ",
+        )
+        #plt.scatter(
+         #   series["pe_order"],
+          #  series["median"],
+           # marker="x",
+            #color="black",
+            #label=f"{algo.upper()} median",
+        #)
     plt.xlabel("PE order")
     plt.ylabel("Relative Estimation Error")
-    plt.title(f"Scenario: {scenario} (median REE)")
+    plt.title(f"{scenario} (mean ±1σ REE)")
     plt.grid(True, linestyle="--", alpha=0.5)
     plt.legend()
     plt.tight_layout()
@@ -305,16 +352,18 @@ def save_outputs(df: pd.DataFrame, cfg: IdentifiabilityConfig) -> None:
     csv_path = os.path.join(cfg.outdir, cfg.csv_name)
     df.to_csv(csv_path, index=False)
 
-    plot_target = os.path.join(cfg.outdir, "ree_vs_pe_target.png")
-    plot_full = os.path.join(cfg.outdir, "ree_vs_pe_full.png")
-    _plot_group(df, "target", plot_target)
-    _plot_group(df, "full", plot_full)
+    plots: Dict[str, str] = {}
+    for scenario in sorted(df["scenario"].unique()):
+        safe = scenario.replace(" ", "_")
+        plot_path = os.path.join(cfg.outdir, f"ree_vs_pe_{safe}.png")
+        _plot_group(df, scenario, plot_path)
+        plots[scenario] = plot_path
 
     meta = {
         "config": dataclasses.asdict(cfg),
         "pe_requirement": minimal_pe_order_for_identifiability(cfg.n, cfg.m),
         "csv": csv_path,
-        "plots": {"target": plot_target, "full": plot_full},
+        "plots": plots,
     }
     with open(os.path.join(cfg.outdir, "summary.json"), "w", encoding="utf-8") as fh:
         json.dump(meta, fh, indent=2)
@@ -326,7 +375,14 @@ def parse_args(argv: Sequence[str] | None = None) -> IdentifiabilityConfig:
     parser.add_argument("--m", type=int, default=2)
     parser.add_argument("--dt", type=float, default=0.05)
     parser.add_argument("--ntrials", type=int, default=200)
-    parser.add_argument("--target-visible", type=int, default=3)
+    parser.add_argument(
+        "--target-visible",
+        dest="target_visibles",
+        type=int,
+        action="append",
+        help="Desired visible subspace dimensions; repeat for multiple ensembles.",
+        default=None,
+    )
     parser.add_argument("--peorders", type=str, default="1:6")
     parser.add_argument("--sigtype", type=str, default="prbs", choices=["prbs", "multisine"])
     parser.add_argument("--algos", type=str, default="dmdc_tls")
@@ -335,6 +391,7 @@ def parse_args(argv: Sequence[str] | None = None) -> IdentifiabilityConfig:
     parser.add_argument("--outdir", type=str, default="out_pe_ident")
     parser.add_argument("--max-signal-tries", type=int, default=512)
     parser.add_argument("--moesp-s", type=int, default=None)
+    parser.add_argument("--T", type=int, default=None, help="Trajectory length (overrides minimal PE horizon)")
 
     args = parser.parse_args(argv)
 
@@ -352,12 +409,21 @@ def parse_args(argv: Sequence[str] | None = None) -> IdentifiabilityConfig:
         orders = tuple(int(x) for x in args.peorders.replace(",", " ").split())
 
     algos = [token.strip() for token in args.algos.replace(",", " ").split() if token.strip()]
+    if args.target_visibles:
+        targets = tuple(args.target_visibles)
+    else:
+        default_target = min(3, args.n)
+        if default_target == args.n:
+            targets = (args.n,)
+        else:
+            targets = (default_target, args.n)
+
     cfg = IdentifiabilityConfig(
         n=args.n,
         m=args.m,
         dt=args.dt,
         ntrials=args.ntrials,
-        target_visible=args.target_visible,
+        target_visibles=targets,
         seed=args.seed,
         peorders=orders,
         sigtype=args.sigtype,
@@ -366,6 +432,7 @@ def parse_args(argv: Sequence[str] | None = None) -> IdentifiabilityConfig:
         outdir=args.outdir,
         max_signal_tries=args.max_signal_tries,
         moesp_s=args.moesp_s,
+        trajectory_length=args.T,
     )
     return cfg
 
