@@ -42,6 +42,45 @@ def _sweep_estimators():
         "NODE":  lambda X0, X1, U_cm, dt: node_fit(X0, X1, U_cm, dt, epochs=200),
     }
 
+
+def _enhanced_estimators(cfg: EstimatorConsistencyConfig):
+    """
+    Return callables that accept (X0, X1, U_cm, dt) and return (Ahat, Bhat, diagnostics).
+    For ML methods, diagnostics include training details. For others, diagnostics is empty dict.
+    """
+    def node_with_diagnostics(X0, X1, U_cm, dt):
+        """NODE wrapper that returns diagnostics."""
+        result = node_fit(
+            X0, X1, U_cm, dt, 
+            epochs=cfg.node_epochs,
+            lr=cfg.node_lr,
+            patience=cfg.node_patience,
+            min_delta=cfg.node_min_delta,
+            convergence_tol=cfg.node_convergence_tol,
+            max_grad_norm=cfg.node_max_grad_norm,
+            verbose=False,
+            return_diagnostics=True
+        )
+        # result is (Ad, Bd, diagnostics) when return_diagnostics=True
+        return result  # (Ad, Bd, diagnostics)
+    
+    def standard_estimator_wrapper(estimator_func, needs_dt=False):
+        """Wrapper for non-ML estimators to return empty diagnostics."""
+        def wrapper(X0, X1, U_cm, dt):
+            if needs_dt:
+                Ad, Bd = estimator_func(X0, X1, U_cm, dt)
+            else:
+                Ad, Bd = estimator_func(X0, X1, U_cm)
+            return Ad, Bd, {}
+        return wrapper
+    
+    return {
+        "SINDy": standard_estimator_wrapper(sindy_fit, needs_dt=True),
+        "MOESP": standard_estimator_wrapper(moesp_fit, needs_dt=False),
+        "DMDc":  standard_estimator_wrapper(dmdc_tls, needs_dt=False),
+        "NODE":  node_with_diagnostics,
+    }
+
 def _resolve_algo_name(
     name: str,
     available: Mapping[str, Callable[[np.ndarray, np.ndarray, np.ndarray, float], Tuple[np.ndarray, np.ndarray]]],
@@ -572,6 +611,25 @@ class EstimatorConsistencyConfig(ExperimentConfig):
     det: bool = False   # NEW: toggle deterministic Krylov-based x0 construction
     """If True, use Krylov-based construction to hit target dim V(x0) instead of rejection sampling."""
 
+    # NODE-specific hyperparameters
+    node_epochs: int = 200
+    """Maximum number of training epochs for NODE."""
+    
+    node_lr: float = 1e-2
+    """Learning rate for NODE training."""
+    
+    node_patience: int = 50
+    """Early stopping patience for NODE."""
+    
+    node_min_delta: float = 1e-8
+    """Minimum loss improvement for NODE early stopping."""
+    
+    node_convergence_tol: float = 1e-6
+    """Loss threshold for NODE convergence detection."""
+    
+    node_max_grad_norm: float = 1e2
+    """Maximum gradient norm threshold for NODE (current value is appropriate)."""
+
     save_dir: pathlib.Path = field(default_factory=lambda: pathlib.Path("out_estimator_consistency"))
 
     def __post_init__(self) -> None:
@@ -865,6 +923,9 @@ def _draw_prbs(cfg: EstimatorConsistencyConfig, rng: np.random.Generator, dim_vi
 
 def _partially_identifiable_trials(cfg: EstimatorConsistencyConfig, rng: np.random.Generator) -> pd.DataFrame:
     records: List[Dict[str, float]] = []
+    # Use enhanced estimators that return diagnostics
+    enhanced_algs = _enhanced_estimators(cfg)
+    # Keep old estimators for compatibility where diagnostics aren't needed
     algs = _estimate_algorithms()
 
     for hidden_dim in cfg.dims_invisible:
@@ -906,9 +967,15 @@ def _partially_identifiable_trials(cfg: EstimatorConsistencyConfig, rng: np.rand
                     U_cm = U.T
                     zstats = regressor_stats(X0, U_cm, rtol_rank=1e-12)
 
-                    for name, estimator in algs.items():
+                    for name, estimator in enhanced_algs.items():
+                        ml_diagnostics = {}
                         try:
-                            Ahat, Bhat = estimator(X0, X1, U_cm)
+                            if name == "NODE":
+                                # Enhanced NODE returns (Ahat, Bhat, diagnostics)
+                                Ahat, Bhat, ml_diagnostics = estimator(X0, X1, U_cm, cfg.dt)
+                            else:
+                                # Other estimators return (Ahat, Bhat, {})
+                                Ahat, Bhat, ml_diagnostics = estimator(X0, X1, U_cm, cfg.dt)
                         except Exception as exc:  # pragma: no cover - defensive guard
                             rec = {
                                 "hidden_dim": int(hidden_dim),
@@ -939,6 +1006,15 @@ def _partially_identifiable_trials(cfg: EstimatorConsistencyConfig, rng: np.rand
                             })
                             rec.update({k: np.nan for k in ("eqv_ok", "eqv_dA_V", "eqv_dB", "eqv_leak")})
                             rec.update({k: np.nan for k in zstats})
+                            # Add empty ML diagnostics for failed cases
+                            rec.update({
+                                "ml_final_loss": np.nan,
+                                "ml_epochs_actual": np.nan,
+                                "ml_converged": False,
+                                "ml_early_stopped": False,
+                                "ml_training_time_s": np.nan,
+                                "ml_lr": np.nan,
+                            })
                             records.append(rec)
                             continue
 
@@ -953,6 +1029,28 @@ def _partially_identifiable_trials(cfg: EstimatorConsistencyConfig, rng: np.rand
                             rtol_rank=1e-12,
                             use_leak=True,
                         )
+
+                        # Extract ML diagnostics if available
+                        ml_fields = {}
+                        if ml_diagnostics:
+                            ml_fields.update({
+                                "ml_final_loss": ml_diagnostics.get("final_loss", np.nan),
+                                "ml_epochs_actual": ml_diagnostics.get("epochs_actual", np.nan),
+                                "ml_converged": ml_diagnostics.get("converged", False),
+                                "ml_early_stopped": ml_diagnostics.get("early_stopped", False),
+                                "ml_training_time_s": ml_diagnostics.get("training_time_s", np.nan),
+                                "ml_lr": ml_diagnostics.get("hyperparameters", {}).get("lr", np.nan),
+                            })
+                        else:
+                            # Non-ML algorithms get NaN/False for ML fields
+                            ml_fields.update({
+                                "ml_final_loss": np.nan,
+                                "ml_epochs_actual": np.nan,
+                                "ml_converged": False,
+                                "ml_early_stopped": False,
+                                "ml_training_time_s": np.nan,
+                                "ml_lr": np.nan,
+                            })
 
                         rec = {
                             "hidden_dim": int(hidden_dim),
@@ -973,6 +1071,7 @@ def _partially_identifiable_trials(cfg: EstimatorConsistencyConfig, rng: np.rand
                             "eqv_dA_V": info_eqv.get("dA_V", np.nan),
                             "eqv_dB": info_eqv.get("dB", np.nan),
                             "eqv_leak": info_eqv.get("leak", np.nan),
+                            **ml_fields,
                         }
                         records.append(rec)
 

@@ -704,6 +704,7 @@ def run(args: argparse.Namespace) -> None:
             x_axis, y_axis = axis_columns[0], axis_columns[1]
             x_label = AXIS_LABEL[axes[0]]
             y_label = AXIS_LABEL[axes[1]]
+            heat_threshold = float(getattr(args, "heatthr", 1e-12))
             for score_name in summary_df["score"].unique():
                 sub = summary_df[summary_df["score"] == score_name]
                 if sub.empty or x_axis not in sub.columns or y_axis not in sub.columns:
@@ -806,7 +807,95 @@ def run(args: argparse.Namespace) -> None:
                 name = f"{score_name}_heatmap_{axes[0]}_{axes[1]}".replace(",", "_")
                 plot_path = outdir / "plots" / f"{name}.png"
                 fig.savefig(plot_path, dpi=200)
+                base_cmap = im.get_cmap()
+                base_norm = im.norm               
                 plt.close(fig)
+
+ 
+                thr_fig, thr_ax = plt.subplots(figsize=(7.2, 5.2))
+                thr_im = thr_ax.imshow(
+                    data,
+                    origin="lower",
+                    aspect="auto",
+                    extent=(-0.5, n_cols - 0.5, -0.5, n_rows - 0.5),
+                    cmap=base_cmap,
+                    norm=base_norm,
+                )
+                thr_ax.set_xlim(-0.5, n_cols - 0.5)
+                thr_ax.set_ylim(-0.5, n_rows - 0.5)
+                thr_ax.set_xticks(np.arange(n_cols))
+                thr_ax.set_yticks(np.arange(n_rows))
+                thr_ax.set_xticklabels(
+                    [format_axis_tick(axes[0], value) for value in pivot.columns]
+                )
+                thr_ax.set_yticklabels(
+                    [format_axis_tick(axes[1], value) for value in pivot.index]
+                )
+
+                thr_ax.set_xlabel(x_label)
+                thr_ax.set_ylabel(y_label)
+
+                threshold_title = make_heatmap_title(axes[0], axes[1], score_name, sub)
+                thr_ax.set_title(
+                    f"{threshold_title} (red < {heat_threshold:.1e})"
+                )
+
+                if special_state_under and pivot.size:
+                    column_values = list(pivot.columns)
+                    row_values = list(pivot.index)
+                    diag_coords: list[tuple[float, float]] = []
+                    for col_idx, col_val in enumerate(column_values):
+                        for row_idx, row_val in enumerate(row_values):
+                            if math.isclose(float(col_val), float(row_val), rel_tol=0.0, abs_tol=1e-9):
+                                diag_coords.append((float(col_idx), float(row_idx)))
+                                break
+                    if diag_coords:
+                        xs, ys = zip(*diag_coords)
+                        thr_ax.plot(xs, ys, color="red", linewidth=2.0, solid_capstyle="round")
+                        x_start, x_end = xs[0], xs[-1]
+                        y_start, y_end = ys[0], ys[-1]
+                        x_mid = 0.5 * (x_start + x_end)
+                        y_mid = 0.5 * (y_start + y_end)
+                        if len(xs) > 1:
+                            rotation = math.degrees(math.atan2(y_end - y_start, x_end - x_start))
+                        else:
+                            rotation = 45.0
+                        thr_ax.text(
+                            x_mid,
+                            y_mid - 0.35,
+                            "n = m",
+                            color="red",
+                            fontsize=8,
+                            rotation=rotation,
+                            rotation_mode="anchor",
+                            ha="center",
+                            va="center",
+                        )
+
+                if not math.isnan(heat_threshold):
+                    mask = data < heat_threshold
+                else:
+                    mask = np.zeros_like(data, dtype=bool)
+                if np.any(mask):
+                    red_overlay = np.zeros((n_rows, n_cols, 4), dtype=float)
+                    red_overlay[mask] = (1.0, 0.0, 0.0, 1.0)
+                    thr_ax.imshow(
+                        red_overlay,
+                        origin="lower",
+                        aspect="auto",
+                        extent=(-0.5, n_cols - 0.5, -0.5, n_rows - 0.5),
+                    )
+
+                thr_cbar = thr_fig.colorbar(thr_im, ax=thr_ax, pad=0.02)
+                thr_cbar.set_label(
+                    f"{score_name} score (mean; red < {heat_threshold:.1e})"
+                )
+                thr_fig.tight_layout()
+                thr_name = f"{score_name}_heatmap_{axes[0]}_{axes[1]}_thr".replace(",", "_")
+                thr_path = outdir / "plots" / f"{thr_name}.png"
+                thr_fig.savefig(thr_path, dpi=200)
+                plt.close(thr_fig)
+
                 # Create a companion plot that visualizes descent directions with arrows.
                 grad_y, grad_x = np.gradient(data) if data.size else (data, data)
                 descent_x = -grad_x
@@ -1044,6 +1133,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.3,
         help="baseline density used when property is not 'density'",
+    )
+
+    parser.add_argument(
+        "--heatthr",
+        type=float,
+        default=1e-12,
+        help=(
+            "heatmap threshold: cells with mean scores below this value are coloured red"
+        ),
     )
 
     # Deficiency property controls

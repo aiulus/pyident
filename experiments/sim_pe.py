@@ -638,8 +638,131 @@ def run_experiment(cfg: PEVisibleConfig) -> pd.DataFrame:
     # Enhanced interpretation aids (optional)
     if cfg.enhanced_plots:
         create_theory_validation_plots(df, cfg, outdir)
+        # Also generate a human-readable summary
+        _generate_results_summary(df, cfg, outdir)
 
     return df
+
+
+def _generate_results_summary(df: pd.DataFrame, cfg: PEVisibleConfig, outdir: pathlib.Path) -> None:
+    """Generate a human-readable summary of key findings."""
+    
+    summary_lines = [
+        "=" * 60,
+        "PE vs VISIBLE SUBSPACE EXPERIMENT SUMMARY",
+        "=" * 60,
+        f"Configuration: n={cfg.n}, vdim={cfg.visible_dim}, m={cfg.m}",
+        f"Systems tested: {cfg.n_systems} per scenario",
+        f"PE orders: {min(cfg.pe_orders)} to {max(cfg.pe_orders)}",
+        f"Trials per order: {cfg.ntrials}",
+        "",
+        "KEY FINDINGS:",
+        "-" * 20,
+    ]
+    
+    # Main threshold effects
+    for scenario in ['partial', 'full']:
+        scenario_df = df[df['scenario'] == scenario]
+        if scenario_df.empty:
+            continue
+            
+        visible_dim = scenario_df['dim_visible'].iloc[0]
+        
+        # Test main effect
+        before = scenario_df[scenario_df['pe_order_actual'] <= visible_dim]['errA_V_rel']
+        after = scenario_df[scenario_df['pe_order_actual'] > visible_dim]['errA_V_rel']
+        
+        if len(before) > 0 and len(after) > 0:
+            from scipy import stats
+            _, p_val = stats.mannwhitneyu(after, before, alternative='less')
+            effect = (before.median() - after.median()) / before.median() * 100
+            
+            significance = "***" if p_val < 0.001 else "**" if p_val < 0.01 else "*" if p_val < 0.05 else ""
+            
+            summary_lines.append(
+                f"• {scenario.upper()}: {effect:+.1f}% error reduction when r > {visible_dim} "
+                f"(p={p_val:.3f}{significance})"
+            )
+    
+    # Markov parameter validation
+    summary_lines.extend(["", "THEORETICAL VALIDATION:", "-" * 25])
+    
+    markov_successes = 0
+    markov_total = 0
+    
+    for k in range(min(cfg.n, 4)):
+        markov_col = f'markov_err_{k}'
+        if markov_col not in df.columns:
+            continue
+            
+        before = df[df['pe_order_moment'] <= k][markov_col]
+        after = df[df['pe_order_moment'] > k][markov_col]
+        
+        if len(before) > 0 and len(after) > 0:
+            from scipy import stats
+            _, p_val = stats.mannwhitneyu(after, before, alternative='less')
+            effect = (before.median() - after.median()) / before.median() * 100
+            
+            markov_total += 1
+            if p_val < 0.05 and effect > 0:
+                markov_successes += 1
+                
+            status = "✓" if p_val < 0.05 and effect > 0 else "✗"
+            summary_lines.append(f"• Markov E_{k} improves when r > {k}: {status} ({effect:+.1f}%, p={p_val:.3f})")
+    
+    # Ceiling effect
+    summary_lines.extend(["", "CEILING EFFECT:", "-" * 15])
+    partial_df = df[df['scenario'] == 'partial']
+    if not partial_df.empty:
+        v_errors = partial_df['errA_V_subspace_rel']
+        vperp_errors = partial_df['errA_Vperp_subspace_rel']
+        
+        if len(v_errors) > 0 and len(vperp_errors) > 0:
+            ratio = vperp_errors.median() / v_errors.median() if v_errors.median() > 0 else np.inf
+            from scipy import stats
+            _, p_val = stats.mannwhitneyu(vperp_errors, v_errors, alternative='greater')
+            
+            status = "✓" if p_val < 0.05 and ratio > 10 else "✗"
+            summary_lines.append(f"• V⊥ errors >> V errors: {status} ({ratio:.0f}x ratio, p={p_val:.3f})")
+    
+    # Overall assessment
+    summary_lines.extend(["", "OVERALL ASSESSMENT:", "-" * 20])
+    
+    markov_success_rate = 0.0
+    if markov_total > 0:
+        markov_success_rate = markov_successes / markov_total * 100
+        
+        if markov_success_rate >= 75:
+            theory_support = "STRONG"
+        elif markov_success_rate >= 50:
+            theory_support = "MODERATE"  
+        else:
+            theory_support = "WEAK"
+            
+        summary_lines.append(f"• Theory validation: {theory_support} ({markov_success_rate:.0f}% of Markov tests passed)")
+    
+    # Recommendations
+    summary_lines.extend(["", "RECOMMENDATIONS:", "-" * 16])
+    
+    if markov_total > 0 and markov_success_rate < 50:
+        summary_lines.append("• Consider increasing sample size (--n-systems, --n-trials)")
+        summary_lines.append("• Try longer horizons (--T) for better moment-PE estimation")
+    
+    if cfg.n_systems < 50:
+        summary_lines.append("• Increase --n-systems to 100+ for more reliable statistics")
+        
+    if cfg.ntrials < 20:
+        summary_lines.append("• Increase --n-trials to 25+ for better coverage")
+    
+    summary_lines.extend(["", "=" * 60])
+    
+    # Write summary
+    with open(outdir / "RESULTS_SUMMARY.txt", "w") as f:
+        f.write("\n".join(summary_lines))
+    
+    # Also print key findings
+    print("\n" + "\n".join(summary_lines[:15]) + "\n...")
+    print(f"📊 Full summary saved to: {outdir / 'RESULTS_SUMMARY.txt'}")
 
 
 # ---------------------------------------------------------------------------
