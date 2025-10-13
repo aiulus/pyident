@@ -115,7 +115,7 @@ def node_fit(
     Xp: np.ndarray,
     Utrain: np.ndarray,
     dt: float,
-    epochs: int = 300,
+    epochs: int = 500,
     lr: float = 1e-2,
     verbose: bool = True,
     log_every: int = 10,
@@ -123,8 +123,8 @@ def node_fit(
     return_diagnostics: bool = False,
     # Modern ML monitoring parameters
     patience: int = 25,
-    min_delta: float = 1e-6,
-    convergence_tol: float = 1e-5,
+    min_delta: float = 1e-8,
+    convergence_tol: float = 1e-8,
     max_grad_norm: float = 10.0,
     early_stopping: bool = True,
     # Log file parameters

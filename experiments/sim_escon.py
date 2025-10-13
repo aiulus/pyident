@@ -34,12 +34,17 @@ from ..estimators import (
 def _sweep_estimators():
     """
     Return callables that accept (X0, X1, U_cm, dt) and return (Ahat, Bhat).
+    For NODE, this now returns the enhanced version with logging capability.
     """
+    # Get enhanced estimators for NODE with logging
+    cfg = EstimatorConsistencyConfig()
+    enhanced_estimators = _enhanced_estimators(cfg)
+    
     return {
         "SINDy": lambda X0, X1, U_cm, dt: sindy_fit(X0, X1, U_cm, dt),
         "MOESP": lambda X0, X1, U_cm, dt: moesp_fit(X0, X1, U_cm),
         "DMDc":  lambda X0, X1, U_cm, dt: dmdc_tls(X0, X1, U_cm),
-        "NODE":  lambda X0, X1, U_cm, dt: node_fit(X0, X1, U_cm, dt, epochs=300),
+        "NODE":  lambda X0, X1, U_cm, dt: enhanced_estimators["NODE"](X0, X1, U_cm, dt)[:2],  # Return only (Ahat, Bhat), not diagnostics
     }
 
 
@@ -56,9 +61,11 @@ def _enhanced_estimators(cfg: EstimatorConsistencyConfig):
         log_file = None
         if cfg.node_log_dir is not None:
             import pathlib
-            timestamp = time.strftime("%Y%m%d_%H%M%S_%f")[:-3]  # millisecond precision
+            import os
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            pid = os.getpid()
             log_dir = pathlib.Path(cfg.node_log_dir)
-            log_file = str(log_dir / f"node_training_{timestamp}.log")
+            log_file = str(log_dir / f"node_training_{timestamp}_{pid}_{id(X0)}.log")
         
         result = node_fit(
             X0, X1, U_cm, dt, 
@@ -367,8 +374,8 @@ def _visibility_sweep_for_algo(
         fig_uni_std, ax_uni_std = plt.subplots(nrows=1, ncols=1, figsize=(8, 4))
         _boxplot_with_zero_floor(ax_uni_std, uni_std, whis=(5, 95), showfliers=False)
         ax_uni_std.set_title(f"{algorithm_name}: Unified error (A-B mean) — Standard basis", fontsize=14)
-        ax_uni_std.set_xlabel("dim $V(x_0)$", fontsize=12)
-        ax_uni_std.set_ylabel("Relative error (A-B mean)", fontsize=12)
+        ax_uni_std.set_xlabel("dim $V(x_0)$", fontsize=14)
+        ax_uni_std.set_ylabel("Relative error (A-B mean)", fontsize=14)
         ax_uni_std.set_xticks(xticks, xticklabels)
         ax_uni_std.tick_params(axis='both', which='major', labelsize=10)
         ax_uni_std.grid(True, axis="y", linestyle="--", alpha=0.6)
@@ -380,8 +387,8 @@ def _visibility_sweep_for_algo(
         fig_uni_vis, ax_uni_vis = plt.subplots(nrows=1, ncols=1, figsize=(8, 4))
         _boxplot_with_zero_floor(ax_uni_vis, uni_vis, whis=(5, 95), showfliers=False)
         ax_uni_vis.set_title(f"{algorithm_name}: Unified error (A-B mean) — V(x0)-basis", fontsize=14)
-        ax_uni_vis.set_xlabel("dim $V(x_0)$", fontsize=12)
-        ax_uni_vis.set_ylabel("Relative error (A-B mean)", fontsize=12)
+        ax_uni_vis.set_xlabel("dim $V(x_0)$", fontsize=14)
+        ax_uni_vis.set_ylabel("Relative error (A-B mean)", fontsize=14)
         ax_uni_vis.set_xticks(xticks, xticklabels)
         ax_uni_vis.tick_params(axis='both', which='major', labelsize=10)
         ax_uni_vis.grid(True, axis="y", linestyle="--", alpha=0.6)
@@ -393,14 +400,14 @@ def _visibility_sweep_for_algo(
         fig_std_AB, axes_std_AB = plt.subplots(nrows=2, ncols=1, figsize=(8, 6), sharex=True)
         _boxplot_with_zero_floor(axes_std_AB[0], A_std, whis=(5, 95), showfliers=False)
         axes_std_AB[0].set_title("A — Standard basis", fontsize=14)
-        axes_std_AB[0].set_ylabel("Relative error", fontsize=12)
+        axes_std_AB[0].set_ylabel("Relative error", fontsize=14)
         axes_std_AB[0].tick_params(axis='both', which='major', labelsize=10)
         axes_std_AB[0].grid(True, axis="y", linestyle="--", alpha=0.6)
 
         _boxplot_with_zero_floor(axes_std_AB[1], B_std, whis=(5, 95), showfliers=False)
         axes_std_AB[1].set_title("B — Standard basis", fontsize=14)
-        axes_std_AB[1].set_xlabel("dim $V(x_0)$", fontsize=12)
-        axes_std_AB[1].set_ylabel("Relative error", fontsize=12)
+        axes_std_AB[1].set_xlabel("dim $V(x_0)$", fontsize=14)
+        axes_std_AB[1].set_ylabel("Relative error", fontsize=14)
         axes_std_AB[1].set_xticks(xticks, xticklabels)
         axes_std_AB[1].tick_params(axis='both', which='major', labelsize=10)
         axes_std_AB[1].grid(True, axis="y", linestyle="--", alpha=0.6)
@@ -417,14 +424,14 @@ def _visibility_sweep_for_algo(
         fig_vis_AB, axes_vis_AB = plt.subplots(nrows=2, ncols=1, figsize=(8, 6), sharex=True)
         _boxplot_with_zero_floor(axes_vis_AB[0], A_vis, whis=(5, 95), showfliers=False)
         axes_vis_AB[0].set_title("A — V(x0)-basis", fontsize=14)
-        axes_vis_AB[0].set_ylabel("Relative error", fontsize=12)
+        axes_vis_AB[0].set_ylabel("Relative error", fontsize=14)
         axes_vis_AB[0].tick_params(axis='both', which='major', labelsize=10)
         axes_vis_AB[0].grid(True, axis="y", linestyle="--", alpha=0.6)
 
         _boxplot_with_zero_floor(axes_vis_AB[1], B_vis, whis=(5, 95), showfliers=False)
         axes_vis_AB[1].set_title("B — V(x0)-basis", fontsize=14)
-        axes_vis_AB[1].set_xlabel("dim $V(x_0)$", fontsize=12)
-        axes_vis_AB[1].set_ylabel("Relative error", fontsize=12)
+        axes_vis_AB[1].set_xlabel("dim $V(x_0)$", fontsize=14)
+        axes_vis_AB[1].set_ylabel("Relative error", fontsize=14)
         axes_vis_AB[1].set_xticks(xticks, xticklabels)
         axes_vis_AB[1].tick_params(axis='both', which='major', labelsize=10)
         axes_vis_AB[1].grid(True, axis="y", linestyle="--", alpha=0.6)
@@ -441,8 +448,8 @@ def _visibility_sweep_for_algo(
         fig_B_std, ax_B_std = plt.subplots(nrows=1, ncols=1, figsize=(8, 4))
         _boxplot_with_zero_floor(ax_B_std, B_std, whis=(5, 95), showfliers=False)
         ax_B_std.set_title(f"{algorithm_name}: B errors — Standard basis", fontsize=14)
-        ax_B_std.set_xlabel("dim $V(x_0)$", fontsize=12)
-        ax_B_std.set_ylabel("Relative error", fontsize=12)
+        ax_B_std.set_xlabel("dim $V(x_0)$", fontsize=14)
+        ax_B_std.set_ylabel("Relative error", fontsize=14)
         ax_B_std.set_xticks(xticks, xticklabels)
         ax_B_std.tick_params(axis='both', which='major', labelsize=10)
         ax_B_std.grid(True, axis="y", linestyle="--", alpha=0.6)
@@ -454,8 +461,8 @@ def _visibility_sweep_for_algo(
         fig_B_vis, ax_B_vis = plt.subplots(nrows=1, ncols=1, figsize=(8, 4))
         _boxplot_with_zero_floor(ax_B_vis, B_vis, whis=(5, 95), showfliers=False)
         ax_B_vis.set_title(f"{algorithm_name}: B errors — V(x0)-basis", fontsize=14)
-        ax_B_vis.set_xlabel("dim $V(x_0)$", fontsize=12)
-        ax_B_vis.set_ylabel("Relative error", fontsize=12)
+        ax_B_vis.set_xlabel("dim $V(x_0)$", fontsize=14)
+        ax_B_vis.set_ylabel("Relative error", fontsize=14)
         ax_B_vis.set_xticks(xticks, xticklabels)
         ax_B_vis.tick_params(axis='both', which='major', labelsize=10)
         ax_B_vis.grid(True, axis="y", linestyle="--", alpha=0.6)
@@ -467,8 +474,8 @@ def _visibility_sweep_for_algo(
         fig_A_std, ax_A_std = plt.subplots(nrows=1, ncols=1, figsize=(8, 4))
         _boxplot_with_zero_floor(ax_A_std, A_std, whis=(5, 95), showfliers=False)
         ax_A_std.set_title(f"{algorithm_name}: A errors — Standard basis", fontsize=14)
-        ax_A_std.set_xlabel("dim $V(x_0)$", fontsize=12)
-        ax_A_std.set_ylabel("Relative error", fontsize=12)
+        ax_A_std.set_xlabel("dim $V(x_0)$", fontsize=14)
+        ax_A_std.set_ylabel("Relative error", fontsize=14)
         ax_A_std.set_xticks(xticks, xticklabels)
         ax_A_std.tick_params(axis='both', which='major', labelsize=10)
         ax_A_std.grid(True, axis="y", linestyle="--", alpha=0.6)
@@ -480,8 +487,8 @@ def _visibility_sweep_for_algo(
         fig_A_vis, ax_A_vis = plt.subplots(nrows=1, ncols=1, figsize=(8, 4))
         _boxplot_with_zero_floor(ax_A_vis, A_vis, whis=(5, 95), showfliers=False)
         ax_A_vis.set_title(f"{algorithm_name}: A errors — V(x0)-basis", fontsize=14)
-        ax_A_vis.set_xlabel("dim $V(x_0)$", fontsize=12)
-        ax_A_vis.set_ylabel("Relative error", fontsize=12)
+        ax_A_vis.set_xlabel("dim $V(x_0)$", fontsize=14)
+        ax_A_vis.set_ylabel("Relative error", fontsize=14)
         ax_A_vis.set_xticks(xticks, xticklabels)
         ax_A_vis.tick_params(axis='both', which='major', labelsize=10)
         ax_A_vis.grid(True, axis="y", linestyle="--", alpha=0.6)
@@ -495,8 +502,8 @@ def _visibility_sweep_for_algo(
         # Left: Standard basis
         _boxplot_with_zero_floor(axes_uni_side[0], uni_std, whis=(5, 95), showfliers=False)
         axes_uni_side[0].set_title("Unified error (A-B mean) — Standard basis", fontsize=14)
-        axes_uni_side[0].set_xlabel("dim $V(x_0)$", fontsize=12)
-        axes_uni_side[0].set_ylabel("Relative error (A-B mean)", fontsize=12)
+        axes_uni_side[0].set_xlabel("dim $V(x_0)$", fontsize=14)
+        axes_uni_side[0].set_ylabel("Relative error (A-B mean)", fontsize=14)
         axes_uni_side[0].set_xticks(xticks, xticklabels)
         axes_uni_side[0].tick_params(axis='both', which='major', labelsize=10)
         axes_uni_side[0].grid(True, axis="y", linestyle="--", alpha=0.6)
@@ -504,7 +511,7 @@ def _visibility_sweep_for_algo(
         # Right: V(x0) basis
         _boxplot_with_zero_floor(axes_uni_side[1], uni_vis, whis=(5, 95), showfliers=False)
         axes_uni_side[1].set_title("Unified error (A-B mean) — V(x0)-basis", fontsize=14)
-        axes_uni_side[1].set_xlabel("dim $V(x_0)$", fontsize=12)
+        axes_uni_side[1].set_xlabel("dim $V(x_0)$", fontsize=14)
         axes_uni_side[1].set_xticks(xticks, xticklabels)
         axes_uni_side[1].tick_params(axis='both', which='major', labelsize=10)
         axes_uni_side[1].grid(True, axis="y", linestyle="--", alpha=0.6)
