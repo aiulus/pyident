@@ -16,7 +16,11 @@ the system matrices from a single trajectory and measure errors both in the
 ambient space and restricted to the visible subspace.  The resulting CSV and
 plots let us verify whether estimation errors drop once the PE order exceeds
 the visible dimension.
+
+Earlier runs:
+    python -m pyident.experiments.sim_pe --dt 0.01 --T 20 --n 8 --vdim 3
 """
+
 
 from __future__ import annotations
 
@@ -389,17 +393,46 @@ def run_experiment(cfg: PEVisibleConfig) -> pd.DataFrame:
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--ntrials", type=int, default=100)
-    parser.add_argument("--outdir", type=str, default="out_pe_vs_visible")
+    
+    # Basic experiment parameters
+    parser.add_argument("--seed", type=int, default=0, help="Random seed")
+    parser.add_argument("--ntrials", type=int, default=25, help="Number of trials per PE order")
+    parser.add_argument("--outdir", type=str, default="out_pe_vs_visible", help="Output directory")
+    
+    # System dimensions
     parser.add_argument("--n", type=int, default=5, help="State dimension for the system")
-    parser.add_argument(
-        "--vdim",
-        type=int,
-        default=3,
-        help="Target visible subspace dimension dim(V(x0)) for the partial scenario",
-    )
+    parser.add_argument("--vdim", type=int, default=3, help="Target visible subspace dimension dim(V(x0)) for the partial scenario")
+    parser.add_argument("--m", type=int, default=2, help="Input dimension")
+    
+    # Simulation parameters
+    parser.add_argument("--T", type=int, default=200, help="Simulation horizon length")
+    parser.add_argument("--dt", type=float, default=0.1, help="Discretization time step")
+    parser.add_argument("--dwell", type=int, default=1, help="PRBS dwell time")
+    parser.add_argument("--u-scale", type=float, default=3.0, help="Input scaling factor")
+    parser.add_argument("--noise-std", type=float, default=0.0, help="Measurement noise standard deviation")
+    
+    # PE order configuration
+    parser.add_argument("--pe-orders", type=str, default="1,2,3,4,5,6,7,8,9,10", 
+                        help="Comma-separated list of PE orders to test")
+    
+    # Algorithm parameters
+    parser.add_argument("--T-padding", type=int, default=10, help="Additional horizon padding")
+    parser.add_argument("--T-min", type=int, default=0, help="Minimum horizon length")
+    parser.add_argument("--max-system-attempts", type=int, default=500, help="Maximum attempts to draw suitable system")
+    parser.add_argument("--max-x0-attempts", type=int, default=256, help="Maximum attempts to draw suitable initial state")
+    
+    # Tolerance parameters
+    parser.add_argument("--visible-tol", type=float, default=1e-8, help="Tolerance for visible subspace computation")
+    parser.add_argument("--eps-norm", type=float, default=1e-12, help="Epsilon for relative norm computation")
+    
+    # Behavioral flags
+    parser.add_argument("--det", action="store_true", help="Use deterministic x0 construction")
+    parser.add_argument("--exact-pe", action="store_true", default=True, help="Enforce exact block PE order")
+    
     args = parser.parse_args(argv)
+    
+    # Parse PE orders from comma-separated string
+    pe_orders = tuple(int(x.strip()) for x in args.pe_orders.split(",") if x.strip())
 
     cfg = PEVisibleConfig(
         seed=args.seed,
@@ -407,6 +440,21 @@ def main(argv: Sequence[str] | None = None) -> None:
         outdir=args.outdir,
         n=args.n,
         visible_dim=args.vdim,
+        m=args.m,
+        T=args.T,
+        dt=args.dt,
+        dwell=args.dwell,
+        u_scale=args.u_scale,
+        noise_std=args.noise_std,
+        pe_orders=pe_orders,
+        T_padding=args.T_padding,
+        T_min=args.T_min,
+        max_system_attempts=args.max_system_attempts,
+        max_x0_attempts=args.max_x0_attempts,
+        visible_tol=args.visible_tol,
+        eps_norm=args.eps_norm,
+        deterministic_x0=args.det,
+        enforce_exact_block_pe=args.exact_pe,
     )
 
     df = run_experiment(cfg)
