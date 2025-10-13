@@ -1,7 +1,8 @@
 # pyident/estimators.py
 from __future__ import annotations
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union, Dict, Any
 import numpy as np
+import scipy.linalg
 import pysindy
 import torch
 
@@ -123,13 +124,22 @@ def node_fit(
     return_diagnostics: bool = False,
     # Modern ML monitoring parameters
     patience: int = 25,
-    min_delta: float = 1e-8,
-    convergence_tol: float = 1e-8,
+    min_delta: float = 1e-6,  # Relaxed from 1e-8 per feedback
+    convergence_tol: float = 1e-6,  # Relaxed from 1e-8 per feedback
     max_grad_norm: float = 10.0,
     early_stopping: bool = True,
     # Log file parameters
     log_file: str | None = None,
     log_append: bool = True,
+    # Enhanced numerical parameters per feedback
+    device: str | None = None,
+    dtype: str | None = None,
+    seed: int | None = None,
+    weight_decay: float = 1e-6,
+    use_scheduler: bool = True,
+    warmstart_lstsq: bool = True,
+    continuous_residual_weight: float = 1e-2,
+    return_ct_params: bool = True,
 ):
     """Train a linear continuous-time NODE and return discretized dynamics.
 
@@ -174,6 +184,22 @@ def node_fit(
         Path to log file for storing training progress. If None, no file logging.
     log_append : bool, default=True
         Whether to append to existing log file or overwrite
+    device : str, optional
+        Device to run on ('cpu', 'cuda'). If None, defaults to 'cpu'.
+    dtype : str, optional
+        Tensor data type ('float32', 'float64'). If None, defaults to 'float64'.
+    seed : int, optional
+        Random seed for reproducibility
+    weight_decay : float, default=1e-6
+        L2 regularization weight for Adam optimizer
+    use_scheduler : bool, default=True
+        Whether to use ReduceLROnPlateau scheduler
+    warmstart_lstsq : bool, default=True
+        Whether to initialize with discrete least-squares solution
+    continuous_residual_weight : float, default=1e-2
+        Weight for continuous residual loss term to improve small-dt conditioning
+    return_ct_params : bool, default=True
+        Whether to return continuous-time parameters in diagnostics
         
     Returns
     -------
@@ -186,21 +212,88 @@ def node_fit(
     """
     import time
     
+    # Set random seed for reproducibility
+    if seed is not None:
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+    
     n, T = Xtrain.shape
     U_cm = _ensure_channel_major(Utrain, T)
     m = U_cm.shape[0]
 
-    device = torch.device("cpu")
-    dtype = torch.float32
+    # Device and dtype configuration (High-ROI improvement A)
+    if device is None:
+        device_obj = torch.device("cpu")
+    else:
+        device_obj = torch.device(device)
+        
+    if dtype is None:
+        dtype_obj = torch.float64  # Default to float64 for better conditioning
+    else:
+        dtype_obj = getattr(torch, dtype)
 
-    Xk = torch.tensor(Xtrain.T, dtype=dtype, device=device)  # (T, n)
-    Uk = torch.tensor(U_cm.T, dtype=dtype, device=device)    # (T, m)
-    Xnext = torch.tensor(Xp.T, dtype=dtype, device=device)   # (T, n)
+    # Adaptive convergence tolerance based on data scale
+    data_scale = float(torch.tensor(Xp).pow(2).mean().item()) if convergence_tol == 1e-6 else 1.0
+    adaptive_convergence_tol = convergence_tol * max(data_scale, 1e-6)
 
-    A_ct = torch.nn.Parameter(torch.zeros((n, n), dtype=dtype, device=device))
-    B_ct = torch.nn.Parameter(torch.zeros((n, m), dtype=dtype, device=device))
+    # Create tensors with consistent dtype and device (High-ROI improvement A)
+    Xk = torch.tensor(Xtrain.T, dtype=dtype_obj, device=device_obj)  # (T, n)
+    Uk = torch.tensor(U_cm.T, dtype=dtype_obj, device=device_obj)    # (T, m)
+    Xnext = torch.tensor(Xp.T, dtype=dtype_obj, device=device_obj)   # (T, n)
+
+    # Initialize parameters with warmstart if requested (High-ROI improvement E)
+    if warmstart_lstsq:
+        # Discrete least-squares warm start: min||Z*Theta - X+||
+        Z = torch.cat([Xk, Uk], dim=1)  # (T, n+m)
+        try:
+            Theta = torch.linalg.lstsq(Z, Xnext).solution  # (n+m, n)
+            Ad0 = Theta[:n, :].T  # (n, n)
+            Bd0 = Theta[n:, :].T  # (n, m)
+            
+            # Attempt continuous-time initialization via matrix log (High-ROI improvement F)
+            try:
+                I = torch.eye(n, dtype=dtype_obj, device=device_obj)
+                # Safe matrix log with fallback for singular cases
+                if torch.linalg.det(Ad0) > 1e-12:
+                    A_ct_init = torch.matrix_log(Ad0) / dt
+                    # Solve for B_ct from ZOH relation: (Ad - I) = A_ct * dt * Bd_dt/dt
+                    # Bd = A_ct^-1 * (Ad - I) * B_ct, so B_ct = A_ct \ (Ad-I) \ Bd
+                    if torch.linalg.det(A_ct_init) > 1e-12:
+                        B_ct_init = torch.linalg.solve(A_ct_init, torch.linalg.solve(Ad0 - I, Bd0))
+                    else:
+                        # Fallback to scaled discrete init if A_ct is singular
+                        A_ct_init = (Ad0 - I) / dt
+                        B_ct_init = Bd0 / dt
+                else:
+                    # Fallback for singular Ad0
+                    A_ct_init = torch.randn_like(Ad0) * 0.1
+                    B_ct_init = torch.randn(n, m, dtype=dtype_obj, device=device_obj) * 0.1
+            except Exception:
+                # Fallback to simple discrete-time scaling 
+                A_ct_init = (Ad0 - torch.eye(n, dtype=dtype_obj, device=device_obj)) / dt
+                B_ct_init = Bd0 / dt
+        except Exception:
+            # Fallback to random initialization if lstsq fails
+            A_ct_init = torch.randn((n, n), dtype=dtype_obj, device=device_obj) * 0.1
+            B_ct_init = torch.randn((n, m), dtype=dtype_obj, device=device_obj) * 0.1
+    else:
+        # Random initialization
+        A_ct_init = torch.randn((n, n), dtype=dtype_obj, device=device_obj) * 0.1
+        B_ct_init = torch.randn((n, m), dtype=dtype_obj, device=device_obj) * 0.1
+    
+    A_ct = torch.nn.Parameter(A_ct_init)
+    B_ct = torch.nn.Parameter(B_ct_init)
     params = [A_ct, B_ct]
-    optimizer = torch.optim.Adam(params, lr=lr)
+    # Add weight decay for regularization (High-ROI improvement I)
+    optimizer = torch.optim.Adam(params, lr=lr, weight_decay=weight_decay)
+    
+    # Add learning rate scheduler (High-ROI improvement H)
+    scheduler = None
+    if use_scheduler:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', factor=0.5, patience=10, 
+            threshold=1e-6, min_lr=lr*1e-3, verbose=verbose
+        )
 
     # Enhanced training monitoring
     start_time = time.time()
@@ -230,22 +323,45 @@ def node_fit(
         else:
             log_file_handle.write(f"\n# New session: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
 
-    def _block_matrix() -> torch.Tensor:
-        block = torch.zeros((n + m, n + m), dtype=dtype, device=device)
-        block[:n, :n] = A_ct
-        block[:n, n:] = B_ct
-        return block
+    def _compute_discrete_matrices() -> tuple[torch.Tensor, torch.Tensor]:
+        """Efficient computation without block matrix exponential (High-ROI improvement B)"""
+        # Ad = exp(A_ct * dt)
+        Ad = torch.matrix_exp(A_ct * dt)
+        
+        # Bd = A_ct^-1 * (Ad - I) * B_ct (ZOH formula)
+        I = torch.eye(n, dtype=dtype_obj, device=device_obj)
+        try:
+            # Use solve for numerical stability
+            Bd = torch.linalg.solve(A_ct, (Ad - I)) @ B_ct
+        except Exception:
+            # Fallback with Tikhonov regularization if A_ct is singular
+            Bd = torch.linalg.solve(A_ct + 1e-10 * I, (Ad - I)) @ B_ct
+        
+        return Ad, Bd
 
     for epoch in range(int(epochs)):
         optimizer.zero_grad()
 
-        block = _block_matrix()
-        exp_block = torch.matrix_exp(block * float(dt))
-        Ad = exp_block[:n, :n]
-        Bd = exp_block[:n, n:]
+        # Efficient discrete matrix computation (High-ROI improvement B)
+        Ad, Bd = _compute_discrete_matrices()
 
+        # Primary discrete-time prediction loss
         preds = Xk @ Ad.T + Uk @ Bd.T
-        loss = torch.nn.functional.mse_loss(preds, Xnext)
+        discrete_loss = torch.nn.functional.mse_loss(preds, Xnext)
+        
+        # Continuous residual term for better small-dt conditioning (High-ROI improvement G)
+        continuous_residual = (Xnext - Xk) / dt - (Xk @ A_ct.T + Uk @ B_ct.T)
+        continuous_loss = torch.nn.functional.mse_loss(
+            continuous_residual, torch.zeros_like(continuous_residual)
+        )
+        
+        # Combined loss
+        loss = discrete_loss + continuous_residual_weight * continuous_loss
+        
+        # NaN/Inf guard (High-ROI improvement D)
+        if not torch.isfinite(loss):
+            raise RuntimeError(f"Loss became non-finite at epoch {epoch}; check dtype/init/lr.")
+        
         loss.backward()
         
         # Gradient monitoring and clipping
@@ -257,8 +373,12 @@ def node_fit(
         loss_value = float(loss.item())
         history.append(loss_value)
         
-        # Convergence detection
-        if loss_value < convergence_tol:
+        # Update learning rate scheduler (High-ROI improvement H)
+        if scheduler is not None:
+            scheduler.step(loss_value)
+        
+        # Convergence detection with adaptive tolerance
+        if loss_value < adaptive_convergence_tol:
             converged = True
             message = f"[NODE] ✓ Converged at epoch {epoch}: loss={loss_value:.6e} < tol={convergence_tol:.1e}"
             if verbose:
@@ -322,37 +442,70 @@ def node_fit(
         log_file_handle.write("# " + "="*60 + "\n")
         log_file_handle.close()
 
+    # Final parameter extraction (High-ROI improvement O)
     with torch.no_grad():
-        block = _block_matrix()
-        exp_block = torch.matrix_exp(block * float(dt))
-        Ad = exp_block[:n, :n].cpu().numpy()
-        Bd = exp_block[:n, n:].cpu().numpy()
+        Ad, Bd = _compute_discrete_matrices()
+        Ad_np = Ad.cpu().numpy()
+        Bd_np = Bd.cpu().numpy()
+        
+        # Extract continuous-time parameters
+        A_ct_np = A_ct.detach().cpu().numpy()
+        B_ct_np = B_ct.detach().cpu().numpy()
+        
+        # ZOH consistency check (High-ROI improvement O)
+        I_np = np.eye(n)
+        Ad_expected = scipy.linalg.expm(A_ct_np * dt)
+        Bd_expected = np.linalg.solve(A_ct_np, (Ad_expected - I_np)) @ B_ct_np if np.linalg.det(A_ct_np) > 1e-12 else Bd_np
+        
+        zoh_consistency_Ad = np.linalg.norm(Ad_np - Ad_expected, 'fro')
+        zoh_consistency_Bd = np.linalg.norm(Bd_np - Bd_expected, 'fro')
+        zoh_consistency = zoh_consistency_Ad + zoh_consistency_Bd
 
-    # Enhanced diagnostics
+    # Enhanced diagnostics with CT parameters and consistency checks
     if return_diagnostics or return_history:
+        # Safe final loss extraction (High-ROI improvement P) 
+        final_loss = float(history[-1]) if history else float("nan")
+        
         diagnostics = {
             'loss_history': np.array(history),
             'grad_norm_history': np.array(grad_norms),
-            'final_loss': history[-1] if history else float('inf'),
+            'final_loss': final_loss,
             'best_loss': best_loss,
             'epochs_actual': epochs_actual,
             'epochs_requested': epochs,
             'converged': converged,
             'early_stopped': early_stopped,
             'training_time_s': training_time,
-            'convergence_rate': -np.log(history[-1] / history[0]) / epochs_actual if len(history) > 1 and history[0] > 0 else 0.0,
+            'convergence_rate': -np.log(final_loss / history[0]) / epochs_actual if len(history) > 1 and history[0] > 0 and np.isfinite(final_loss) else 0.0,
+            # ZOH consistency metrics (High-ROI improvement O)
+            'zoh_consistency_fro': zoh_consistency,
+            'zoh_consistency_Ad': zoh_consistency_Ad,  
+            'zoh_consistency_Bd': zoh_consistency_Bd,
             'hyperparameters': {
                 'lr': lr,
                 'patience': patience,
                 'min_delta': min_delta,
                 'convergence_tol': convergence_tol,
+                'adaptive_convergence_tol': adaptive_convergence_tol,
                 'max_grad_norm': max_grad_norm,
                 'early_stopping': early_stopping,
+                'weight_decay': weight_decay,
+                'continuous_residual_weight': continuous_residual_weight,
+                'warmstart_lstsq': warmstart_lstsq,
+                'use_scheduler': use_scheduler,
+                'device': str(device_obj),
+                'dtype': str(dtype_obj),
             }
         }
-        return Ad, Bd, diagnostics
+        
+        # Add continuous-time parameters if requested (High-ROI improvement O)
+        if return_ct_params:
+            diagnostics['A_ct'] = A_ct_np
+            diagnostics['B_ct'] = B_ct_np
+            
+        return Ad_np, Bd_np, diagnostics
     
-    return Ad, Bd
+    return Ad_np, Bd_np
 
 
 def sindy_fit(
