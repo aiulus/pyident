@@ -31,6 +31,23 @@ from ..estimators import (
     sindy_fit
 )
 
+def _moesp_wrapper(X0, X1, U_cm, dt):
+    """Wrapper to convert new moesp_fit interface to expected (X0, X1, U_cm) -> (A, B) interface."""
+    n, T = X0.shape
+    m = U_cm.shape[0]
+    
+    # Convert to time-major format expected by new moesp_fit
+    u_ts = U_cm.T  # (T, m)
+    x_ts = X0.T    # (T, n) - use current states as "outputs" for full-state identification
+    
+    # Choose appropriate horizon (s should be >= model order, typically n)
+    s = min(max(n + 1, 5), T // 3)  # Ensure s is reasonable for the data length
+    
+    # Call new moesp_fit - returns (A, B, C, D, info)
+    A, B, C, D, info = moesp_fit(u_ts, x_ts, s=s, n=n, return_states=False)
+    
+    return A, B
+
 def _sweep_estimators():
     """
     Return callables that accept (X0, X1, U_cm, dt) and return (Ahat, Bhat).
@@ -42,7 +59,7 @@ def _sweep_estimators():
     
     return {
         "SINDy": lambda X0, X1, U_cm, dt: sindy_fit(X0, X1, U_cm, dt),
-        "MOESP": lambda X0, X1, U_cm, dt: moesp_fit(X0, X1, U_cm),
+        "MOESP": _moesp_wrapper,  # Use new moesp_fit with proper interface conversion
         "DMDc":  lambda X0, X1, U_cm, dt: dmdc_tls(X0, X1, U_cm),
         "NODE":  lambda X0, X1, U_cm, dt: enhanced_estimators["NODE"](X0, X1, U_cm, dt)[:2],  # Return only (Ahat, Bhat), not diagnostics
     }
@@ -94,9 +111,14 @@ def _enhanced_estimators(cfg: EstimatorConsistencyConfig):
             return Ad, Bd, {}
         return wrapper
     
+    def moesp_with_diagnostics(X0, X1, U_cm, dt):
+        """MOESP wrapper that returns diagnostics."""
+        A, B = _moesp_wrapper(X0, X1, U_cm, dt)
+        return A, B, {}  # Empty diagnostics dict for consistency
+    
     return {
         "SINDy": standard_estimator_wrapper(sindy_fit, needs_dt=True),
-        "MOESP": standard_estimator_wrapper(moesp_fit, needs_dt=False),
+        "MOESP": moesp_with_diagnostics,  # Use new moesp_fit with proper interface conversion
         "DMDc":  standard_estimator_wrapper(dmdc_tls, needs_dt=False),
         "NODE":  node_with_diagnostics,
     }
@@ -789,11 +811,15 @@ def _estimation_errors(
     }
 
 
+def _moesp_wrapper_simple(X0, X1, U_cm):
+    """Simple MOESP wrapper for legacy interface (without dt parameter)."""
+    return _moesp_wrapper(X0, X1, U_cm, dt=None)  # dt is not used in moesp_wrapper anyway
+
 def _estimate_algorithms() -> Mapping[str, Callable[[np.ndarray, np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]]:
     return {
         "dmdc_pinv": dmdc_pinv,
         "dmdc_tls": dmdc_tls,
-        "moesp": moesp_fit,
+        "moesp": _moesp_wrapper_simple,  # Use new moesp_fit with proper interface conversion
     }
 
 

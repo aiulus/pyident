@@ -297,7 +297,7 @@ def node_fit(
     if use_scheduler:
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode='min', factor=0.5, patience=10, 
-            threshold=1e-6, min_lr=lr*1e-3, verbose=verbose
+            threshold=1e-6, min_lr=lr*1e-3
         )
 
     # Enhanced training monitoring
