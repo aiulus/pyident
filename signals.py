@@ -49,8 +49,19 @@ def multisine(
 
 
 # ------------------ PE (block-Hankel) --------------------------------
-
 def hankel_blocks(u: np.ndarray, s: int) -> np.ndarray:
+    """Build block Hankel of depth s for multi-input u (T×m) -> (s*m)×(T-s+1)."""
+    T, m = u.shape
+    if s <= 0:
+        raise ValueError("s must be positive.")
+    cols = T - s + 1
+    if cols <= 0:
+        raise ValueError("Not enough samples for requested Hankel depth.")
+    blocks = [u[i:i + cols].T for i in range(s)]  # each (m × cols)
+    return np.vstack(blocks)                       # (s*m × cols)
+
+
+def hankel_blocks_old(u: np.ndarray, s: int) -> np.ndarray:
     """Build block Hankel of depth s for multi-input u (T×m) -> (s*m)×cols."""
     T, m = u.shape
     cols = T - 2 * s + 1
