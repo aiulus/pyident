@@ -127,6 +127,9 @@ def node_fit(
     convergence_tol: float = 1e-5,
     max_grad_norm: float = 10.0,
     early_stopping: bool = True,
+    # Log file parameters
+    log_file: str | None = None,
+    log_append: bool = True,
 ):
     """Train a linear continuous-time NODE and return discretized dynamics.
 
@@ -167,6 +170,10 @@ def node_fit(
         Maximum gradient norm (for gradient clipping)
     early_stopping : bool, default=True
         Whether to use early stopping
+    log_file : str, optional
+        Path to log file for storing training progress. If None, no file logging.
+    log_append : bool, default=True
+        Whether to append to existing log file or overwrite
         
     Returns
     -------
@@ -203,6 +210,25 @@ def node_fit(
     patience_counter = 0
     converged = False
     early_stopped = False
+    
+    # Initialize file logging
+    log_file_handle = None
+    if log_file is not None:
+        import pathlib
+        log_path = pathlib.Path(log_file)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        mode = 'a' if log_append else 'w'
+        log_file_handle = open(log_path, mode, encoding='utf-8')
+        
+        # Write header for new log file
+        if not log_append or log_path.stat().st_size == 0:
+            log_file_handle.write("# NODE Training Log\n")
+            log_file_handle.write(f"# Started: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            log_file_handle.write(f"# Parameters: n={n}, m={m}, T={T}, dt={dt:.3f}\n")
+            log_file_handle.write(f"# Hyperparameters: epochs={epochs}, lr={lr}, patience={patience}, tol={convergence_tol:.1e}\n")
+            log_file_handle.write("epoch,mse_loss,grad_norm,best_loss,patience_counter,status\n")
+        else:
+            log_file_handle.write(f"\n# New session: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     def _block_matrix() -> torch.Tensor:
         block = torch.zeros((n + m, n + m), dtype=dtype, device=device)
@@ -234,8 +260,13 @@ def node_fit(
         # Convergence detection
         if loss_value < convergence_tol:
             converged = True
+            message = f"[NODE] ✓ Converged at epoch {epoch}: loss={loss_value:.6e} < tol={convergence_tol:.1e}"
             if verbose:
-                print(f"[NODE] ✓ Converged at epoch {epoch}: loss={loss_value:.6e} < tol={convergence_tol:.1e}")
+                print(message)
+            if log_file_handle:
+                log_file_handle.write(f"{epoch},{loss_value:.6e},{grad_norm:.6e},{best_loss:.6e},{patience_counter},CONVERGED\n")
+                log_file_handle.write(f"# {message}\n")
+                log_file_handle.flush()
             break
             
         # Early stopping logic
@@ -248,8 +279,13 @@ def node_fit(
                 
             if patience_counter >= patience:
                 early_stopped = True
+                message = f"[NODE] ⏹ Early stopping at epoch {epoch}: no improvement for {patience} epochs"
                 if verbose:
-                    print(f"[NODE] ⏹ Early stopping at epoch {epoch}: no improvement for {patience} epochs")
+                    print(message)
+                if log_file_handle:
+                    log_file_handle.write(f"{epoch},{loss_value:.6e},{grad_norm:.6e},{best_loss:.6e},{patience_counter},EARLY_STOPPED\n")
+                    log_file_handle.write(f"# {message}\n")
+                    log_file_handle.flush()
                 break
         
         # Gradient explosion detection
@@ -258,16 +294,33 @@ def node_fit(
                 print(f"[NODE] ⚠️ High gradient norm at epoch {epoch}: {grad_norm:.3e}")
         
         # Progress logging
-        if verbose and (epoch % log_every == 0 or epoch == epochs - 1):
+        if epoch % log_every == 0 or epoch == epochs - 1:
             improvement_info = ""
+            status = "TRAINING"
             if epoch > 0:
                 if early_stopping:
                     improvement_info = f" | best={best_loss:.6e} | patience={patience_counter}/{patience}"
-                
-            print(f"[NODE] epoch {epoch:4d}  mse={loss_value:.6e}  grad_norm={grad_norm:.3e}{improvement_info}")
+            
+            if verbose:
+                print(f"[NODE] epoch {epoch:4d}  mse={loss_value:.6e}  grad_norm={grad_norm:.3e}{improvement_info}")
+            
+            # Log to file every log_every epochs
+            if log_file_handle:
+                log_file_handle.write(f"{epoch},{loss_value:.6e},{grad_norm:.6e},{best_loss:.6e},{patience_counter},{status}\n")
+                if epoch % (log_every * 5) == 0:  # Flush periodically
+                    log_file_handle.flush()
 
     training_time = time.time() - start_time
     epochs_actual = len(history)
+    
+    # Final logging and cleanup
+    if log_file_handle:
+        log_file_handle.write(f"# Training completed: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        log_file_handle.write(f"# Final results: epochs={epochs_actual}, final_loss={history[-1] if history else 'N/A':.6e}, ")
+        log_file_handle.write(f"best_loss={best_loss:.6e}, time={training_time:.2f}s\n")
+        log_file_handle.write(f"# Status: {'CONVERGED' if converged else 'EARLY_STOPPED' if early_stopped else 'COMPLETED'}\n")
+        log_file_handle.write("# " + "="*60 + "\n")
+        log_file_handle.close()
 
     with torch.no_grad():
         block = _block_matrix()

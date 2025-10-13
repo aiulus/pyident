@@ -89,8 +89,8 @@ class SignalPropertyConfig(ExperimentConfig):
     eps_norm: float = 1e-12
     deterministic_x0: bool = False
 
-    pe_s_max: int = 12
-    pe_moment_r_max: int = 12
+    pe_s_max: int = 50  # Increased from 12 to allow measurement of true PE orders  
+    pe_moment_r_max: int = 50  # Increased from 12 to allow measurement of true PE orders
 
     outdir: str = "out_signal_props"
 
@@ -500,8 +500,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--visible-tol", type=float, default=1e-8, help="Visible subspace tolerance")
     parser.add_argument("--eps-norm", type=float, default=1e-12, help="Epsilon for relative norms")
     parser.add_argument("--det", action="store_true", help="Use deterministic x0 construction")
-    parser.add_argument("--pe-s-max", type=int, default=12, help="Maximum block-PE depth for diagnostics")
-    parser.add_argument("--pe-moment-r-max", type=int, default=12, help="Maximum moment-PE order for diagnostics")
+    parser.add_argument("--pe-s-max", type=int, default=50, help="Maximum block-PE depth for diagnostics")  # Increased from 12
+    parser.add_argument("--pe-moment-r-max", type=int, default=50, help="Maximum moment-PE order for diagnostics")  # Increased from 12
 
     args = parser.parse_args(argv)
 

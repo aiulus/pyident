@@ -50,6 +50,16 @@ def _enhanced_estimators(cfg: EstimatorConsistencyConfig):
     """
     def node_with_diagnostics(X0, X1, U_cm, dt):
         """NODE wrapper that returns diagnostics with modern ML monitoring."""
+        import time
+        
+        # Generate unique log file name if logging enabled
+        log_file = None
+        if cfg.node_log_dir is not None:
+            import pathlib
+            timestamp = time.strftime("%Y%m%d_%H%M%S_%f")[:-3]  # millisecond precision
+            log_dir = pathlib.Path(cfg.node_log_dir)
+            log_file = str(log_dir / f"node_training_{timestamp}.log")
+        
         result = node_fit(
             X0, X1, U_cm, dt, 
             epochs=cfg.node_epochs,
@@ -60,7 +70,9 @@ def _enhanced_estimators(cfg: EstimatorConsistencyConfig):
             max_grad_norm=cfg.node_max_grad_norm,
             early_stopping=cfg.node_early_stopping,
             verbose=False,
-            return_diagnostics=True
+            return_diagnostics=True,
+            log_file=log_file,
+            log_append=False  # Each run gets its own log file
         )
         # result is (Ad, Bd, diagnostics) when return_diagnostics=True
         return result  # (Ad, Bd, diagnostics)
@@ -633,6 +645,9 @@ class EstimatorConsistencyConfig(ExperimentConfig):
     
     node_early_stopping: bool = True
     """Whether to enable early stopping (modern ML practice)."""
+    
+    node_log_dir: str | None = "node_logs"
+    """Directory for NODE training logs. If None, no file logging."""
 
     save_dir: pathlib.Path = field(default_factory=lambda: pathlib.Path("out_estimator_consistency"))
 
