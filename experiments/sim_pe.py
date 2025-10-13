@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Dict, List, Sequence, Tuple
+from typing_extensions import Literal
 
 import argparse
 import pathlib
@@ -37,7 +38,7 @@ import pandas as pd
 from ..config import ExperimentConfig
 from ..estimators import dmdc_tls
 from ..metrics import projected_errors, build_visible_basis_dt
-from ..signals import estimate_moment_pe_order, estimate_pe_order
+from ..signals import estimate_moment_pe_order, estimate_pe_order, multisine
 from ..simulation import prbs, simulate_dt
 from .visible_sampling import VisibleDrawConfig, draw_system_state_with_visible_dim
 from .interpretation_aids import create_theory_validation_plots
@@ -56,8 +57,10 @@ class PEVisibleConfig(ExperimentConfig):
     m: int = 2
     T: int = 200  # Fixed horizon for all PE orders
     dt: float = 0.1
-    dwell: int = 1
-    u_scale: float = 3.0
+    signal_type: Literal["prbs", "multisine"] = "prbs"
+    dwell: int = 1  # PRBS only
+    u_scale: float = 3.0  # PRBS only
+    k_lines: int = 8  # multisine only
     noise_std: float = 0.0
 
     pe_orders: Sequence[int] = tuple(range(1, 11))
@@ -87,6 +90,12 @@ class PEVisibleConfig(ExperimentConfig):
             raise ValueError("max_x0_attempts must be positive.")
         if not 0 < self.visible_dim <= self.n:
             raise ValueError("visible_dim must satisfy 0 < visible_dim <= n.")
+        if self.signal_type not in ("prbs", "multisine"):
+            raise ValueError("signal_type must be 'prbs' or 'multisine'.")
+        if self.signal_type == "prbs" and self.dwell <= 0:
+            raise ValueError("dwell must be positive for PRBS signals.")
+        if self.signal_type == "multisine" and self.k_lines <= 0:
+            raise ValueError("k_lines must be positive for multisine signals.")
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +207,89 @@ def _make_prbs_with_order(
         final_U = final_U * np.sqrt(target_energy / current_energy)
     
     return final_U, best_r
+
+
+def _make_multisine_with_order(
+    order: int,
+    cfg: PEVisibleConfig,
+    rng: np.random.Generator,
+    max_tries: int = 20,
+) -> Tuple[np.ndarray, int]:
+    """Draw a multisine sequence that achieves the requested block-PE order with normalized energy.
+    
+    Note: Multisine signals may have limited PE order capability depending on T and k_lines.
+    This function implements early stopping when the target order appears unachievable.
+    """
+    
+    T = _horizon_for_order(order, cfg)
+    best_U: np.ndarray | None = None
+    best_r: int = -1
+    best_score: Tuple[int, int, int] | None = None
+    
+    # Target energy for normalization (for fair comparison with PRBS)
+    target_energy = float(3.0**2 * T * cfg.m)  # Use consistent energy scaling like PRBS
+    
+    # Early stopping: if we don't improve after several tries, give up
+    no_improvement_count = 0
+    early_stop_threshold = max(5, max_tries // 4)
+
+    for trial in range(max_tries):
+        U = multisine(T, cfg.m, rng=rng, k_lines=cfg.k_lines)
+        
+        # Normalize to constant total energy
+        current_energy = float(np.sum(U**2))
+        if current_energy > 0:
+            U = U * np.sqrt(target_energy / current_energy)
+        
+        r = int(estimate_pe_order(U, s_max=order))
+        r_plus = int(estimate_pe_order(U, s_max=order + 1))
+        if r == order and r_plus < order + 1:
+            return U, r
+
+        excess = max(0, r_plus - order)
+        score = (abs(r - order), excess, r_plus)
+        improved = best_score is None or score < best_score
+        
+        if improved:
+            best_U = U
+            best_r = r
+            best_score = score
+            no_improvement_count = 0
+        else:
+            no_improvement_count += 1
+            
+        # Early stopping: if we've tried several times without improvement, 
+        # the target PE order may be unachievable with current parameters
+        if no_improvement_count >= early_stop_threshold and trial >= early_stop_threshold:
+            break
+
+    if best_U is None:
+        best_U = multisine(T, cfg.m, rng=rng, k_lines=cfg.k_lines)
+        best_r = int(estimate_pe_order(best_U, s_max=order))
+    
+    # Apply energy normalization to final result
+    final_U = best_U  # Type narrowing
+    current_energy = float(np.sum(final_U**2))
+    if current_energy > 0:
+        final_U = final_U * np.sqrt(target_energy / current_energy)
+    
+    return final_U, best_r
+
+
+def _make_signal_with_order(
+    order: int,
+    cfg: PEVisibleConfig,
+    rng: np.random.Generator,
+    max_tries: int = 20,
+) -> Tuple[np.ndarray, int]:
+    """Generate a signal that achieves the requested block-PE order based on cfg.signal_type."""
+    
+    if cfg.signal_type == "prbs":
+        return _make_prbs_with_order(order, cfg, rng, max_tries)
+    elif cfg.signal_type == "multisine":
+        return _make_multisine_with_order(order, cfg, rng, max_tries)
+    else:
+        raise ValueError(f"Unknown signal type: {cfg.signal_type}")
 
 
 def _relative_norm(err: float, ref: float, eps: float) -> float:
@@ -585,7 +677,7 @@ def run_experiment(cfg: PEVisibleConfig) -> pd.DataFrame:
     for order in cfg.pe_orders:
         print(f"  PE order {order}:")
         for trial in range(cfg.ntrials):
-            U, pe_block = _make_prbs_with_order(order, cfg, input_rng)
+            U, pe_block = _make_signal_with_order(order, cfg, input_rng)
             pe_moment = int(estimate_moment_pe_order(U, r_max=max_order, dt=cfg.dt))
             
             # Run trials on all systems for this PE order and input
@@ -788,8 +880,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     # Simulation parameters
     parser.add_argument("--T", type=int, default=200, help="Fixed simulation horizon length for all PE orders")
     parser.add_argument("--dt", type=float, default=0.1, help="Discretization time step")
-    parser.add_argument("--dwell", type=int, default=1, help="PRBS dwell time")
-    parser.add_argument("--u-scale", type=float, default=3.0, help="Input scaling factor")
+    parser.add_argument("--sigtype", "--signal-type", type=str, default="prbs", choices=["prbs", "multisine"], 
+                        help="Signal type for excitation")
+    parser.add_argument("--dwell", type=int, default=1, help="PRBS dwell time (PRBS only)")
+    parser.add_argument("--u-scale", type=float, default=3.0, help="Input scaling factor (PRBS only)")
+    parser.add_argument("--k-lines", type=int, default=8, help="Number of frequency lines (multisine only)")
     parser.add_argument("--noise-std", type=float, default=0.0, help="Measurement noise standard deviation")
     
     # PE order configuration
@@ -837,8 +932,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         m=args.m,
         T=args.T,
         dt=args.dt,
+        signal_type=args.sigtype,
         dwell=args.dwell,
         u_scale=args.u_scale,
+        k_lines=getattr(args, 'k_lines', 8),  # Handle hyphenated argument
         noise_std=args.noise_std,
         pe_orders=pe_orders,
         T_min=args.T_min,

@@ -233,13 +233,18 @@ def node_fit(
         dtype_obj = getattr(torch, dtype)
 
     # Adaptive convergence tolerance based on data scale
-    data_scale = float(torch.tensor(Xp).pow(2).mean().item()) if convergence_tol == 1e-6 else 1.0
+    if convergence_tol == 1e-6:
+        data_scale = float(np.mean(np.square(Xp)))
+    else:
+        data_scale = 1.0
     adaptive_convergence_tol = convergence_tol * max(data_scale, 1e-6)
 
     # Create tensors with consistent dtype and device (High-ROI improvement A)
     Xk = torch.tensor(Xtrain.T, dtype=dtype_obj, device=device_obj)  # (T, n)
     Uk = torch.tensor(U_cm.T, dtype=dtype_obj, device=device_obj)    # (T, m)
     Xnext = torch.tensor(Xp.T, dtype=dtype_obj, device=device_obj)   # (T, n)
+
+    eye_n = torch.eye(n, dtype=dtype_obj, device=device_obj)
 
     # Initialize parameters with warmstart if requested (High-ROI improvement E)
     if warmstart_lstsq:
@@ -329,13 +334,12 @@ def node_fit(
         Ad = torch.matrix_exp(A_ct * dt)
         
         # Bd = A_ct^-1 * (Ad - I) * B_ct (ZOH formula)
-        I = torch.eye(n, dtype=dtype_obj, device=device_obj)
+        bd_rhs = (Ad - eye_n) @ B_ct
         try:
-            # Use solve for numerical stability
-            Bd = torch.linalg.solve(A_ct, (Ad - I)) @ B_ct
-        except Exception:
+            Bd = torch.linalg.solve(A_ct, bd_rhs)
+        except RuntimeError:
             # Fallback with Tikhonov regularization if A_ct is singular
-            Bd = torch.linalg.solve(A_ct + 1e-10 * I, (Ad - I)) @ B_ct
+            Bd = torch.linalg.solve(A_ct + 1e-10 * eye_n, bd_rhs)
         
         return Ad, Bd
 
@@ -351,9 +355,7 @@ def node_fit(
         
         # Continuous residual term for better small-dt conditioning (High-ROI improvement G)
         continuous_residual = (Xnext - Xk) / dt - (Xk @ A_ct.T + Uk @ B_ct.T)
-        continuous_loss = torch.nn.functional.mse_loss(
-            continuous_residual, torch.zeros_like(continuous_residual)
-        )
+        continuous_loss = continuous_residual.pow(2).mean()
         
         # Combined loss
         loss = discrete_loss + continuous_residual_weight * continuous_loss
@@ -709,15 +711,6 @@ def _block_hankel(time_series: np.ndarray, s: int) -> np.ndarray:
     return np.vstack(blocks)
 
 
-def _compute_rank(R: np.ndarray, tol: Optional[float]) -> int:
-    diag = np.abs(np.diag(R))
-    if diag.size == 0:
-        return 0
-    if tol is None:
-        tol = np.max(diag) * 1e-12 if diag.size else 1e-12
-    return int(np.sum(diag > tol))
-
-
 def _solve_ridge_normal(
     A: np.ndarray,
     B: np.ndarray,
@@ -799,13 +792,13 @@ def moesp_fit(
     Uf = _block_hankel(u_dm[s:, :], s)
     Yf = _block_hankel(y_dm[s:, :], s)
 
-    # Left annihilator of U_f via QR(U_f^T)
-    Q, R = np.linalg.qr(Uf.T, mode="complete")
-    r = _compute_rank(R, tol=None)
-    if r >= Q.shape[1]:
+    # Left annihilator of U_f via null space of U_f
+    null_basis = scipy.linalg.null_space(Uf, rcond=projector_rcond)
+    if null_basis.size == 0:
         raise ValueError("input Hankel has full column rank; cannot form annihilator")
-    Q2 = Q[:, r:]
+    Q2 = null_basis
     Lf = Q2.T
+    rank_Uf = Uf.shape[1] - Q2.shape[1]
 
     Yf_t = Yf @ Q2
     Up_t = Up @ Q2
@@ -868,7 +861,7 @@ def moesp_fit(
         "s": s,
         "n": n,
         "singular_values": S_svd,
-        "rank_Uf": r,
+        "rank_Uf": rank_Uf,
         "u_mean": u_mean,
         "y_mean": y_mean,
         "Lf": Lf,
