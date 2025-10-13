@@ -682,8 +682,204 @@ def moesp_fullstate(
     return dmdc_pinv(X, Xp, U, rcond=rcond)
 
 
-# Backward-compat wrapper: same call sites as old code/tests
+def _demean_channels(arr: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    if arr.ndim == 1:
+        arr = arr[:, None]
+    mean = arr.mean(axis=0, keepdims=True)
+    return arr - mean, mean.ravel()
+
+
+def _block_hankel(time_series: np.ndarray, s: int) -> np.ndarray:
+    """Return the block Hankel matrix with ``s`` block rows.
+
+    Parameters
+    ----------
+    time_series : array_like, shape (T, d)
+        Time-major sequence.
+    s : int
+        Number of block rows.
+    """
+    if s <= 0:
+        raise ValueError("block size s must be positive")
+    T, d = time_series.shape
+    L = T - s + 1
+    if L <= 0:
+        raise ValueError("time series too short for requested block size")
+    blocks = [time_series[j:j+L, :].T for j in range(s)]
+    return np.vstack(blocks)
+
+
+def _compute_rank(R: np.ndarray, tol: Optional[float]) -> int:
+    diag = np.abs(np.diag(R))
+    if diag.size == 0:
+        return 0
+    if tol is None:
+        tol = np.max(diag) * 1e-12 if diag.size else 1e-12
+    return int(np.sum(diag > tol))
+
+
+def _solve_ridge_normal(
+    A: np.ndarray,
+    B: np.ndarray,
+    ridge: float = 0.0,
+) -> np.ndarray:
+    """Solve min_X ||AX - B||_F^2 + ridge ||X||_F^2."""
+    if ridge > 0.0:
+        AtA = A.T @ A + ridge * np.eye(A.shape[1], dtype=A.dtype)
+        AtB = A.T @ B
+        return np.linalg.solve(AtA, AtB)
+    sol, *_ = np.linalg.lstsq(A, B, rcond=None)
+    return sol
+
+
 def moesp_fit(
+    u_ts: np.ndarray,
+    y_ts: np.ndarray,
+    s: int,
+    n: Optional[int] = None,
+    svd_tol: Optional[float] = None,
+    projector_rcond: float = 1e-12,
+    ridge: float = 0.0,
+    ls_rcond: Optional[float] = None,
+    return_states: bool = False,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]:
+    """Faithful MOESP implementation following Van Overschee & De Moor.
+
+    Parameters
+    ----------
+    u_ts : array_like, shape (T, m)
+        Input sequence (time-major).
+    y_ts : array_like, shape (T, ell)
+        Output sequence (time-major).
+    s : int
+        Past horizon / number of block rows (must be >= model order).
+    n : int, optional
+        System order. If ``None``, it is inferred from the singular values
+        using ``svd_tol``.
+    svd_tol : float, optional
+        Threshold for selecting the model order when ``n`` is ``None``. When
+        omitted, a relative tolerance of ``1e-12`` is used.
+    projector_rcond : float, default=1e-12
+        Regularization for the pseudo-inverse inside the oblique projection.
+    ridge : float, default=0.0
+        Ridge parameter used when solving the shift-invariance equation for ``A``.
+    ls_rcond : float, optional
+        Cutoff for the least-squares solves when regressing ``B`` and ``D``.
+    return_states : bool, default=False
+        If ``True``, the recovered conditional state sequence is included in the
+        ``info`` dictionary under the ``"state_sequence"`` key.
+    """
+
+    u_ts = np.asarray(u_ts, dtype=float)
+    y_ts = np.asarray(y_ts, dtype=float)
+    if u_ts.ndim == 1:
+        u_ts = u_ts[:, None]
+    if y_ts.ndim == 1:
+        y_ts = y_ts[:, None]
+
+    if u_ts.shape[0] != y_ts.shape[0]:
+        raise ValueError("u_ts and y_ts must share the same time dimension")
+
+    T = u_ts.shape[0]
+    m = u_ts.shape[1]
+    ell = y_ts.shape[1]
+    if s < 1:
+        raise ValueError("s must be a positive integer")
+    if T < 2 * s:
+        raise ValueError("time series too short relative to chosen horizon")
+
+    u_dm, u_mean = _demean_channels(u_ts)
+    y_dm, y_mean = _demean_channels(y_ts)
+
+    L = T - 2 * s + 1
+    if L <= 0:
+        raise ValueError("insufficient samples for the requested horizon")
+
+    Up = _block_hankel(u_dm[: T - s, :], s)
+    Uf = _block_hankel(u_dm[s:, :], s)
+    Yf = _block_hankel(y_dm[s:, :], s)
+
+    # Left annihilator of U_f via QR(U_f^T)
+    Q, R = np.linalg.qr(Uf.T, mode="complete")
+    r = _compute_rank(R, tol=None)
+    if r >= Q.shape[1]:
+        raise ValueError("input Hankel has full column rank; cannot form annihilator")
+    Q2 = Q[:, r:]
+    Lf = Q2.T
+
+    Yf_t = Yf @ Q2
+    Up_t = Up @ Q2
+    # Orthogonal projection of Y_f onto row(U_p)
+    G = Up_t @ Up_t.T
+    G_pinv = np.linalg.pinv(G, rcond=projector_rcond)
+    Ob = Yf_t @ Up_t.T @ G_pinv @ Up_t
+
+    U_svd, S_svd, Vh_svd = np.linalg.svd(Ob, full_matrices=False)
+    if n is None:
+        if S_svd.size == 0:
+            raise ValueError("no singular values available to infer the order")
+        if svd_tol is None:
+            svd_tol = max(1e-12, S_svd[0] * 1e-12)
+        n = int(np.sum(S_svd > svd_tol))
+    if n <= 0:
+        raise ValueError("model order must be positive")
+    if n > S_svd.size:
+        raise ValueError("requested order exceeds the rank of the projection")
+
+    Sigma_sqrt = np.sqrt(S_svd[:n])
+    Gamma = U_svd[:, :n] * Sigma_sqrt[np.newaxis, :]
+    Xfp = (Sigma_sqrt[:, np.newaxis] * Vh_svd[:n, :])
+
+    # Extract C and A using shift-invariance
+    C = Gamma[:ell, :]
+    Gamma_up = Gamma[: (s - 1) * ell, :]
+    Gamma_dn = Gamma[ell:, :]
+    if Gamma_up.size == 0 or Gamma_dn.size == 0:
+        raise ValueError("horizon s too small to extract system matrices")
+    A = _solve_ridge_normal(Gamma_up, Gamma_dn, ridge=ridge)
+
+    # Recover conditional states (aligned with columns of Xfp)
+    X_cond = Xfp
+
+    # Regress D first using the aligned subset of samples
+    idx = np.arange(s, s + X_cond.shape[1])
+    if idx[-1] >= T:
+        idx = idx[idx < T]
+        X_cond = X_cond[:, : idx.size]
+    U_reg = u_dm[idx, :]
+    Y_reg = y_dm[idx, :]
+
+    # y_k ≈ C x_k + D u_k
+    residual_y = (Y_reg - (X_cond.T @ C.T))
+    D_t, *_ = np.linalg.lstsq(U_reg, residual_y, rcond=ls_rcond)
+    D = D_t.T
+
+    # x_{k+1} ≈ A x_k + B u_k
+    if X_cond.shape[1] < 2:
+        raise ValueError("not enough aligned states to regress B")
+    Xk = X_cond[:, :-1]
+    Xk1 = X_cond[:, 1:]
+    U_state = u_dm[idx[:-1], :]
+    rhs = (Xk1 - A @ Xk).T
+    B_t, *_ = np.linalg.lstsq(U_state, rhs, rcond=ls_rcond)
+    B = B_t.T
+
+    info: Dict[str, Any] = {
+        "s": s,
+        "n": n,
+        "singular_values": S_svd,
+        "rank_Uf": r,
+        "u_mean": u_mean,
+        "y_mean": y_mean,
+        "Lf": Lf,
+    }
+    if return_states:
+        info["state_sequence"] = X_cond
+
+    return A, B, C, D, info
+
+# Backward-compat wrapper: same call sites as old code/tests
+def moesp_fit_old(
     X: np.ndarray,      # (n, T)
     Xp: np.ndarray,     # (n, T)
     U: np.ndarray,      # (m, T)
