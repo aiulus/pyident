@@ -171,12 +171,9 @@ def generate_signal(order: int, cfg: IdentifiabilityConfig, rng: np.random.Gener
         return _draw_prbs_exact(order, cfg.m, rng, cfg.max_signal_tries, T)
     return _draw_multisine_exact(order, cfg.m, rng, cfg.max_signal_tries, T)
 
-
-def _relative_estimation_error(A: np.ndarray, B: np.ndarray, Ahat: np.ndarray, Bhat: np.ndarray) -> float:
-    ref = np.hstack([A, B])
-    est = np.hstack([Ahat, Bhat])
-    denom = float(np.linalg.norm(ref, ord="fro"))
-    return float(np.linalg.norm(est - ref, ord="fro") / (denom + 1e-12))
+def _relative_matrix_error(reference: np.ndarray, estimate: np.ndarray) -> float:
+    denom = float(np.linalg.norm(reference, ord="fro"))
+    return float(np.linalg.norm(estimate - reference, ord="fro") / (denom + 1e-12))
 
 
 def _available_estimators(cfg: IdentifiabilityConfig) -> Dict[str, Callable[[np.ndarray, np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]]:
@@ -284,18 +281,20 @@ def run_experiment(cfg: IdentifiabilityConfig) -> pd.DataFrame:
                         "scenario": scenario,
                         "algo": algo_name,
                         "pe_order": order,
-                        "ree": np.nan,
+                        "ree_A": np.nan,
+                        "ree_B": np.nan,
                         "error": str(exc),
                         "dim_visible": dim_visible,
                     })
                     continue
-
-                ree = _relative_estimation_error(A, B, Ahat, Bhat)
+                ree_A = _relative_matrix_error(A, Ahat)
+                ree_B = _relative_matrix_error(B, Bhat)
                 rows.append({
                     "scenario": scenario,
                     "algo": algo_name,
                     "pe_order": order,
-                    "ree": ree,
+                    "ree_A": ree_A,
+                    "ree_B": ree_B,
                     "dim_visible": dim_visible,
                 })
 
@@ -310,7 +309,7 @@ def _plot_group(df: pd.DataFrame, scenario: str, outpath: str) -> None:
 
     grouped = (
         subset.groupby(["algo", "pe_order"])  # type: ignore[arg-type]
-        ["ree"]
+        [["ree_A", "ree_B"]]
         .agg(["mean", "std", "median"])
         .reset_index()
     )
@@ -318,18 +317,34 @@ def _plot_group(df: pd.DataFrame, scenario: str, outpath: str) -> None:
     plt.figure(figsize=(6.4, 4.8))
     for algo in sorted(subset["algo"].unique()):
         series = grouped[grouped["algo"] == algo].sort_values("pe_order")
-        mean = series["mean"].to_numpy()
-        std = series["std"].fillna(0.0).to_numpy()
-        lower = np.clip(mean - std, a_min=0.0, a_max=None)
-        upper = mean + std
-        plt.plot(series["pe_order"], mean, marker="o", label=f"{algo.upper()} mean")
-        plt.fill_between(
-            series["pe_order"],
-            lower,
-            upper,
-            alpha=0.2,
-            label=f"{algo.upper()} ±1σ",
-        )
+        if series.empty:
+            continue
+
+        pe_orders = series["pe_order"].to_numpy()
+
+        for key, color, label_suffix in (
+            ("ree_A", "tab:blue", "A"),
+            ("ree_B", "tab:orange", "B"),
+        ):
+            mean = series[(key, "mean")].to_numpy()
+            std = series[(key, "std")].fillna(0.0).to_numpy()
+            lower = np.clip(mean - std, a_min=0.0, a_max=None)
+            upper = mean + std
+            plt.plot(
+                pe_orders,
+                mean,
+                marker="o",
+                color=color,
+                label=f"{algo.upper()} {label_suffix} mean",
+            )
+            plt.fill_between(
+                pe_orders,
+                lower,
+                upper,
+                alpha=0.2,
+                color=color,
+                #label=f"{algo.upper()} {label_suffix} ±1σ",
+            )
         #plt.scatter(
          #   series["pe_order"],
           #  series["median"],
