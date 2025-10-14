@@ -39,61 +39,61 @@ JAX acceleration is optional; the CLI will enable it when `jax` is installed and
 ---
 
 ### Experiments
-#### Single system score-REE correlation
+#### Single system score-REE correlation (\S5.1.1)
 ```
 python -m pyident.experiments.sim_scoree \
  --outdir multicol_simcor_3xfinal \
 --n 10 --m 10 --zoom --deficiency 1 --T 100 
 ```
-#### dim(V(x0))-stratified score-REE correlation over multiple systems
+#### dim(V(x0))-stratified score-REE correlation over multiple systems (\S5.1.1)
 ```
 python -m pyident.experiments.sim_mse --zoom
 --ensvol 200 --x0count 200 \
 --T 100 --n 5 --m 5 --dt 0.01
 ```
-#### Equivalence class membership tests
+#### Equivalence class membership tests (\S5.1.2)
 ```
 python -m pyident.experiments.sim_escon --single --det
 ```
 #### Single-varying-axis parameter regime sweeps
-##### S1: Sparsity
+##### S1: Sparsity (\S5.2.1)
 ```
 python -m pyident.experiments.sim_regcomb --axes "sparsity" \
     --sparsity-grid 0.0:0.1:1.0 --samples 100 \
     --x0-samples 100 --outdir results/sim3_sparse
 ```
 
-##### S2: State dimension
+##### S2: State dimension (\S5.2.2)
 ```
 python -m pyident.experiments.sim_regcomb --axes "ndim" \
     --ndim-grid 2:2:20 --samples 100 \
     --x0-samples 100 --outdir results/sim3_state
 ```
-##### S3: Underactuation
+##### S3: Underactuation (\S5.2.3)
 ```
 python -m pyident.experiments.sim_regcomb --axes "underactuation" \
      --samples 100 --x0-samples 100 --outdir results/sim3_underactuation
 ```
 #### Double-varying-axis parameter regime sweeps
-##### D1: Sparsity vs. state dimension
+##### D1: Sparsity vs. state dimension (\S5.2.4)
 ```
 python -m pyident.experiments.sim_regcomb --axes "sparsity, ndim" \
     --sparsity-grid 0.0:0.1:1.0 --ndim-grid 2:2:20 --samples 100 \
     --x0-samples 100 --outdir results/sim3_sparse_state
 ```
-##### D2: State dimension vs. underactuation
+##### D2: State dimension vs. underactuation (\S5.2.5)
 ```
 python -m pyident.experiments.sim_regcomb --axes "ndim, underactuation" \
     --ndim-grid 2:2:20 --samples 100 \
     --x0-samples 100 --outdir results/sim3_state_underactuation
 ```
-##### D3: Underaction vs. sparsity
+##### D3: Underaction vs. sparsity (\S5.2.6)
 ```
 python -m pyident.experiments.sim_regcomb --axes "underactuation, sparsity" \
         --sparsity-grid 0.0:0.1:1.0 --samples 100 \
         --x0-samples 100 --outdir results/sim3_underactuation_sparsity
 ```
-#### Input sufficiency
+#### Input sufficiency (\S5.3)
 ```
  python -m pyident.experiments.simpe --target-visible 3 --target-visible 8 --n 8
 ```
