@@ -41,7 +41,7 @@ from ..metrics import projected_errors, build_visible_basis_dt
 from ..signals import estimate_moment_pe_order, estimate_pe_order, multisine
 from ..simulation import prbs, simulate_dt
 from .visible_sampling import VisibleDrawConfig, draw_system_state_with_visible_dim
-from .interpretation_aids import create_theory_validation_plots
+from ..discarded.interpretation_aids import create_theory_validation_plots
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..experiments.sim_combreg import parse_grid
+from ..experiments.sim_regcomb import parse_grid
 
 
 def test_parse_grid_range_does_not_overshoot_stop() -> None:
