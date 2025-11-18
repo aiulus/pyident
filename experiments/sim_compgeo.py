@@ -117,6 +117,20 @@ def _candidate_bank(cfg: CompGeoConfig, rng: np.random.Generator, L: int) -> Lis
     return out
 
 
+def _build_bank_sequence(cfg: CompGeoConfig, rng: np.random.Generator) -> List[Dict]:
+    """
+    Precompute a candidate bank for each time window so policies share the same menu.
+    Each element has keys {"L": L_eff, "bank": [...] }.
+    """
+    seq: List[Dict] = []
+    steps = 0
+    while steps < cfg.T_max:
+        L_eff = min(cfg.L, cfg.T_max - steps)
+        seq.append({"L": L_eff, "bank": _candidate_bank(cfg, rng, L_eff)})
+        steps += L_eff
+    return seq
+
+
 def _fit_model(X_hist: np.ndarray, U_hist: np.ndarray, estimator: str, dt: float, fallback: Tuple[np.ndarray, np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
     """Refit (A,B) from data; fall back to provided pair on failure."""
     if X_hist.shape[1] < 2 or U_hist.shape[0] == 0:
@@ -195,6 +209,7 @@ def _run_single_policy(
     policy: str,
     criterion: str,
     rng: np.random.Generator,
+    bank_sequence: List[Dict],
 ) -> List[Dict]:
     """Run one adaptive trajectory for a fixed policy/criterion."""
     n, m = Bd.shape
@@ -206,13 +221,9 @@ def _run_single_policy(
 
     records: List[Dict] = []
     steps = 0
-    while steps < cfg.T_max:
-        L_eff = min(cfg.L, cfg.T_max - steps)
-        if L_eff <= 0:
-            break
-
-        bank = _candidate_bank(cfg, rng, L_eff)
-
+    for win in bank_sequence:
+        L_eff = int(win["L"])
+        bank = win["bank"]
         # Refresh model from accumulated data
         if U_hist_rows:
             U_arr = np.vstack(U_hist_rows)
@@ -337,12 +348,12 @@ def run_compgeo(cfg: CompGeoConfig) -> pd.DataFrame:
                     x0, _ = sample_visible_initial_state(Ad, Bd, Rbasis, k, rng=x_rng, tol=cfg.rtol_rank)
 
                 PV = visible_basis_dt(Ad, Bd, x0, tol_rank=cfg.rtol_rank)
-
+                bank_seq = _build_bank_sequence(cfg, np.random.default_rng(x_rng.integers(1_000_000_000)))
                 for policy in cfg.policies:
                     crits: Sequence[str] = cfg.oed_criteria if policy == "OED" else ("-",)
                     for crit in crits:
                         run_rng = np.random.default_rng(x_rng.integers(1_000_000_000))
-                        recs = _run_single_policy(cfg, Ad, Bd, x0, PV, policy, crit, run_rng)
+                        recs = _run_single_policy(cfg, Ad, Bd, x0, PV, policy, crit, run_rng, bank_seq)
                         for r in recs:
                             r.update(
                                 {

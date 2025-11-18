@@ -25,7 +25,7 @@ def subspace_from_states(X: np.ndarray, tol: float = EPS) -> np.ndarray:
 
     n, T = X.shape
     U, s, _ = svd(X, full_matrices=False)
-    thr = tol * max(n, T) * (s[0] if s.size else 1.0)
+    thr = tol * (s[0] if s.size else 1.0)
     r = int(np.sum(s > thr))
     if r == 0:
         return np.zeros((n, 0), dtype=float)
@@ -116,7 +116,7 @@ def projector_from_basis(Vbasis):
 
 
 def projector_onto_complement(Vbasis: np.ndarray) -> np.ndarray:
-    """Orthogonal projector onto ``span(Vbasis)``\ :sup:`⊥`.
+    """Orthogonal projector onto ``span(Vbasis)`` :sup:`⊥`.
 
     For an empty basis this reduces to the identity on the ambient space.
     """
