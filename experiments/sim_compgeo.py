@@ -388,6 +388,15 @@ if __name__ == "__main__":
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("out_compgeo"))
     parser.add_argument("--n_systems", type=int, default=3)
     parser.add_argument("--n_x0_per_system", type=int, default=2)
+    parser.add_argument("--n", type=int, default=8, help="state dimension")
+    parser.add_argument("--m", type=int, default=2, help="input dimension")
+    parser.add_argument(
+        "--k_values",
+        type=int,
+        nargs="+",
+        default=[2, 3],
+        help="visible subspace dimensions to target",
+    )
     parser.add_argument("--T_max", type=int, default=60)
     parser.add_argument("--L", type=int, default=5)
     parser.add_argument("--u_max", type=float, default=1.0)
@@ -400,6 +409,9 @@ if __name__ == "__main__":
     cfg = CompGeoConfig(
         seed=args.seed,
         save_dir=args.out,
+        n=args.n,
+        m=args.m,
+        k_values=tuple(args.k_values),
         n_systems=args.n_systems,
         n_x0_per_system=args.n_x0_per_system,
         T_max=args.T_max,
