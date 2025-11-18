@@ -135,6 +135,45 @@ def parse_args():
     ps.add_argument("--plot-format", type=str, choices=["png","pdf","both"], default="png",
                     help="Plot format(s) if --plots is used.")
 
+    # -------- vis-subspace --------
+    pvs = sub.add_parser(
+        "vis-subspace",
+        help="Empirical visible subspace approximation from trajectories.",
+    )
+    pvs.add_argument("--n", type=int, default=8)
+    pvs.add_argument("--m", type=int, default=2)
+    pvs.add_argument("--dt", type=float, default=0.1)
+    pvs.add_argument(
+        "--dim-visible",
+        type=str,
+        default="2,4,6",
+        help="Comma-separated list of target visible dimensions.",
+    )
+    pvs.add_argument("--T", type=int, default=200)
+    pvs.add_argument(
+        "--T-grid",
+        type=str,
+        default="10,20,40,80,160",
+        help="Comma-separated list of horizons for empirical subspace building.",
+    )
+    pvs.add_argument("--n-systems", type=int, default=10)
+    pvs.add_argument("--n-x0-per-system", type=int, default=4)
+    pvs.add_argument("--n-signal-realizations", type=int, default=4)
+    pvs.add_argument("--u-scale", type=float, default=1.0)
+    pvs.add_argument("--pe-order-max", type=int, default=16)
+    pvs.add_argument(
+        "--ensemble",
+        type=str,
+        default="stable",
+        choices=["ginibre", "sparse", "stable", "binary"],
+    )
+    pvs.add_argument("--tol", type=float, default=1e-10)
+    pvs.add_argument("--force-hurwitz", action="store_true")
+    pvs.add_argument("--stability-margin", type=float, default=0.05)
+    pvs.add_argument("--save-dir", type=str, default="out_vis_subspace")
+    pvs.add_argument("--seed", type=int, default=0)
+    pvs.add_argument("--deterministic-x0", action="store_true")
+
 
     # -------- sweep-underactuation --------
     pu = sub.add_parser("sweep-underactuation", help="Sweep over m (underactuation study).")
@@ -260,6 +299,41 @@ def main():
     import os
     if getattr(a, "use_jax", False) and getattr(a, "jax_platform", None) in ("cpu","metal"):
         os.environ["JAX_PLATFORM_NAME"] = a.jax_platform
+
+    if a.cmd == "vis-subspace":
+        import pathlib
+        from .experiments.sim_empvis import (
+            VisibleSubspaceApproxConfig,
+            run_visible_subspace_experiment,
+        )
+
+        dim_visible_grid = tuple(_parse_int_list(a.dim_visible))
+        T_grid = tuple(_parse_int_list(a.T_grid))
+
+        cfg = VisibleSubspaceApproxConfig(
+            n=a.n,
+            m=a.m,
+            dt=a.dt,
+            dim_visible_grid=dim_visible_grid,
+            T=a.T,
+            T_grid=T_grid,
+            n_systems=a.n_systems,
+            n_x0_per_system=a.n_x0_per_system,
+            n_signal_realizations=a.n_signal_realizations,
+            u_scale=a.u_scale,
+            pe_order_max=a.pe_order_max,
+            ensemble=a.ensemble,
+            tol=a.tol,
+            deterministic_x0=bool(a.deterministic_x0),
+            force_hurwitz=bool(a.force_hurwitz),
+            stability_margin=a.stability_margin,
+            save_dir=pathlib.Path(a.save_dir),
+            seed=a.seed,
+        )
+
+        df = run_visible_subspace_experiment(cfg)
+        print(df.describe())
+        return
 
     if a.cmd == "single":
         # Build U_restr if requested (canonical subspace spanned by first q basis vectors)

@@ -7,6 +7,41 @@ from scipy.linalg import qr
 EPS = 1e-12
 
 
+def subspace_from_states(X: np.ndarray, tol: float = EPS) -> np.ndarray:
+    """
+    Orthonormal basis for ``span{ x_0, …, x_{T-1} }`` from a state snapshot matrix.
+
+    Parameters
+    ----------
+    X : array, shape (n, T)
+        Snapshot matrix whose columns are consecutive states.
+    tol : float, optional
+        Numerical tolerance used for rank detection.
+    """
+    X = np.asarray(X, dtype=float)
+    if X.size == 0:
+        n = X.shape[0] if X.ndim >= 1 else 0
+        return np.zeros((n, 0), dtype=float)
+
+    n, T = X.shape
+    U, s, _ = svd(X, full_matrices=False)
+    thr = tol * max(n, T) * (s[0] if s.size else 1.0)
+    r = int(np.sum(s > thr))
+    if r == 0:
+        return np.zeros((n, 0), dtype=float)
+    return U[:, :r]
+
+
+def visible_from_traj(X: np.ndarray, tol: float = EPS) -> np.ndarray:
+    """
+    Empirical visible subspace estimated from a state trajectory.
+
+    Returns an orthonormal basis for the span of the provided states, matching
+    the data-only estimator used in the experimental pipeline.
+    """
+    return subspace_from_states(X, tol=tol)
+
+
 def build_visible_basis_dt(Ad, Bd, x0, tol=1e-10, max_pow=None):
     """
     Returns P (n×k) with orthonormal columns spanning
