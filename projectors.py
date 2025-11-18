@@ -128,6 +128,35 @@ def projector_onto_complement(Vbasis: np.ndarray) -> np.ndarray:
     return np.eye(n) - projector_from_basis(Vbasis)
 
 
+def principal_angles(P: np.ndarray, Q: np.ndarray, rtol: float = 1e-12) -> np.ndarray:
+    """
+    Principal angles (radians) between the spans of P and Q.
+
+    Returns an empty array if either basis is empty.
+    """
+    if P.size == 0 or Q.size == 0:
+        return np.zeros((0,), dtype=float)
+    P_orth, _ = np.linalg.qr(P, mode="reduced")
+    Q_orth, _ = np.linalg.qr(Q, mode="reduced")
+    s = np.linalg.svd(P_orth.T @ Q_orth, compute_uv=False)
+    s = np.clip(s, -1.0, 1.0)
+    if s.size == 0:
+        return np.zeros((0,), dtype=float)
+    s_eff = s[s > rtol * s[0]]
+    if s_eff.size == 0:
+        return np.zeros((0,), dtype=float)
+    return np.arccos(s_eff)
+
+
+def projector_gap(P: np.ndarray, Q: np.ndarray) -> float:
+    """Spectral-norm gap ||Π_P - Π_Q||_2 between spans of P and Q."""
+    if P.size == 0 and Q.size == 0:
+        return 0.0
+    PP = projector_from_basis(P)
+    QQ = projector_from_basis(Q)
+    return float(norm(PP - QQ, 2))
+
+
 def normalize(x: np.ndarray, tol: float = 1e-12) -> np.ndarray:
     nrm = float(norm(x))
     if nrm <= tol:

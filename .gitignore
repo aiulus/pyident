@@ -1,6 +1,9 @@
-.csv
-discarded/*
-__pycache__/*
-*/__pycache__/*
-.pyc
+*.csv
+discarded/
+
+# Python cache/bytecode
+__pycache__/
+*.pyc
+
+# VS Code project settings
 .vscode/

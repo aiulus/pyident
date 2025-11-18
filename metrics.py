@@ -501,6 +501,19 @@ def regressor_stats(X0: np.ndarray, U: np.ndarray, rtol_rank: float = 1e-12) -> 
     cond = float(s[0] / (s[-1] + 1e-18))
     return {"rank": rank, "cond": cond, "smin": float(s[-1])}
 
+
+def regressor_stats_on_V(PV: np.ndarray, X0: np.ndarray, U: np.ndarray, rtol: float = 1e-12) -> dict:
+    """
+    Rank/condition of the regressor restricted to V: Z_V = [PV^T X0; U].
+    """
+    ZV = np.vstack([PV.T @ X0, U])
+    s = npl.svd(ZV, compute_uv=False)
+    if s.size == 0:
+        return {"rank": 0, "cond": np.inf, "smin": 0.0}
+    rank = int(np.sum(s > rtol * s[0]))
+    cond = float(s[0] / (s[-1] + 1e-18))
+    return {"rank": rank, "cond": cond, "smin": float(s[-1])}
+
 # --- NEW: DT theoretical-class checker (relative thresholds) ----------
 def same_equiv_class_dt_rel(Ad, Bd, Ahat, Bhat, x0,
                             rtol_eq: float = 1e-2,
