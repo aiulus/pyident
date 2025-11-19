@@ -57,6 +57,10 @@ class CompGeoConfig(ExperimentConfig):
     rtol_rank: float = 1e-12
     fisher_ridge: float = 1e-6
 
+    stop_on_v_sat: bool = False
+    v_sat_eps_proj: float = 1e-2
+    v_sat_min_windows: int = 2
+
     save_dir: pathlib.Path = field(default_factory=lambda: pathlib.Path("out_compgeo"))
 
     def __post_init__(self) -> None:
@@ -219,6 +223,11 @@ def _run_single_policy(
     Ahat, Bhat = Ad.copy(), Bd.copy()  # cold-start with oracle for fairness
     hitting_time: int | None = None
 
+    V_prev: np.ndarray | None = None
+    k_prev: int = 0
+    sat_counter: int = 0
+    v_saturated: bool = False
+
     records: List[Dict] = []
     steps = 0
     for win in bank_sequence:
@@ -289,6 +298,31 @@ def _run_single_policy(
         angs = principal_angles(V_hat_post, PV)
         max_ang = float(np.rad2deg(angs.max())) if angs.size else 0.0
 
+        k_emp = V_hat_post.shape[1]
+        if V_prev is not None:
+            delta_proj_emp = float(
+                np.linalg.norm(
+                    projector_from_basis(V_hat_post) - projector_from_basis(V_prev),
+                    ord="fro",
+                )
+            )
+        else:
+            delta_proj_emp = np.nan
+
+        if (
+            V_prev is not None
+            and k_emp == k_prev
+            and not np.isnan(delta_proj_emp)
+            and delta_proj_emp <= cfg.v_sat_eps_proj
+        ):
+            sat_counter += 1
+        else:
+            sat_counter = 0
+
+        V_prev = V_hat_post
+        k_prev = k_emp
+        v_saturated = sat_counter >= cfg.v_sat_min_windows
+
         try:
             fit_ok, fit_info = data_equivalence_residual(
                 X_arr[:, :-1], X_arr[:, 1:], np.vstack(U_hist_rows).T, Ahat, Bhat, rtol=1e-10
@@ -317,10 +351,17 @@ def _run_single_policy(
                 "dwell": chosen["dwell"],
                 "k_lines": chosen["k_lines"],
                 "fit_resid": fit_resid,
+                "k_emp": k_emp,
+                "delta_proj_emp": delta_proj_emp,
+                "sat_counter": sat_counter,
+                "v_saturated": v_saturated,
             }
         )
 
         if steps >= cfg.T_max:
+            break
+
+        if cfg.stop_on_v_sat and v_saturated:
             break
 
     return records
@@ -404,6 +445,23 @@ if __name__ == "__main__":
     parser.add_argument("--policies", type=str, nargs="+", default=["GA", "OED"])
     parser.add_argument("--oed_criteria", type=str, nargs="+", default=["D", "E"])
     parser.add_argument("--estimator", type=str, default="MOESP")
+    parser.add_argument(
+        "--stop-on-v-sat",
+        action="store_true",
+        help="Stop a trajectory once the empirical visible subspace saturates.",
+    )
+    parser.add_argument(
+        "--v-sat-eps-proj",
+        type=float,
+        default=1e-2,
+        help="Projector gap tolerance for saturation (Frobenius norm).",
+    )
+    parser.add_argument(
+        "--v-sat-min-windows",
+        type=int,
+        default=2,
+        help="Number of consecutive windows required to declare saturation.",
+    )
     args = parser.parse_args()
 
     cfg = CompGeoConfig(
@@ -421,5 +479,8 @@ if __name__ == "__main__":
         policies=tuple(args.policies),
         oed_criteria=tuple(args.oed_criteria),
         estimator=args.estimator,
+        stop_on_v_sat=args.stop_on_v_sat,
+        v_sat_eps_proj=args.v_sat_eps_proj,
+        v_sat_min_windows=args.v_sat_min_windows,
     )
     run_compgeo(cfg)
