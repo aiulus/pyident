@@ -36,6 +36,7 @@ import pandas as pd
 from ..ensembles import controllability_rank
 from ..metrics import pbh_margin_structured, left_eigvec_overlap
 from . import sim_regcomb as base
+from .boxplot_style import set_default_mpl_style, nice_boxplot
 
 
 SCORES = ("pbh", "mu")
@@ -76,6 +77,39 @@ def format_mode_label(mode: str, p_keep: float) -> str:
     if mode == "sphere":
         return "sphere"
     return f"mask_p={p_keep:g}"
+
+def filter_outliers(values: np.ndarray, method: str, k: float, trim_frac: float) -> np.ndarray:
+    if values.size == 0 or method == "none":
+        return values
+    if method == "trim":
+        frac = max(0.0, min(0.49, trim_frac))
+        if frac <= 0.0:
+            return values
+        lo, hi = np.quantile(values, [frac, 1.0 - frac])
+        return values[(values >= lo) & (values <= hi)]
+    if method == "iqr":
+        q1, q3 = np.quantile(values, [0.25, 0.75])
+        iqr = q3 - q1
+        if iqr == 0.0:
+            return values
+        lo = q1 - k * iqr
+        hi = q3 + k * iqr
+        return values[(values >= lo) & (values <= hi)]
+    if method == "zscore":
+        mu = float(np.mean(values))
+        sd = float(np.std(values))
+        if sd == 0.0:
+            return values
+        z = (values - mu) / sd
+        return values[np.abs(z) <= k]
+    if method == "mad":
+        med = float(np.median(values))
+        mad = float(np.median(np.abs(values - med)))
+        if mad == 0.0:
+            return values
+        z = 0.6745 * (values - med) / mad
+        return values[np.abs(z) <= k]
+    raise ValueError(f"unknown outlier filter '{method}'")
 
 
 def _legacy_scenarios(args: argparse.Namespace) -> list[tuple[str, float, int, int, dict[str, Any]]]:
@@ -300,6 +334,8 @@ def run(args: argparse.Namespace) -> None:
             "matplotlib is required for plotting; please install it to run this experiment"
         ) from _MATPLOTLIB_IMPORT_ERROR
 
+    set_default_mpl_style()
+    yscale = None if args.yscale == "none" else args.yscale
     axes = base.parse_axes_spec(args.axes)
     if axes:
         scenario_groups: list[tuple[str, pd.DataFrame]] = []
@@ -326,21 +362,29 @@ def run(args: argparse.Namespace) -> None:
             if 1.0 in p_vals:
                 order.append(format_mode_label("sphere", 1.0))
             order += [format_mode_label("mask", p) for p in p_vals if p < 1.0]
-            data = [sub[sub["mode"] == mode]["value"].to_numpy() for mode in order]
+            data = []
+            for mode in order:
+                vals = sub[sub["mode"] == mode]["value"].to_numpy()
+                vals = filter_outliers(vals, args.outlier_filter, args.outlier_k, args.outlier_trim)
+                data.append(vals)
 
-            plt.figure(figsize=(7.2, 4.8))
-            plt.boxplot(data, labels=order, showfliers=True)
-            plt.ylabel(score_name)
+            fig, ax = plt.subplots(figsize=(7.2, 4.6))
             title = f"{score_name} score distribution"
             if scen_label != "all":
                 title = f"{title} ({scen_label})"
-            plt.title(title)
-            plt.grid(True, axis="y", alpha=0.3)
-            plt.tight_layout()
+            nice_boxplot(
+                ax,
+                data,
+                order,
+                title=title,
+                ylabel=score_name,
+                yscale=yscale,
+            )
+            fig.tight_layout()
             safe_label = scen_label.replace(" ", "_").replace(",", "_")
             plot_name = f"{score_name}_boxplot_{safe_label}.png"
-            plt.savefig(outdir / "plots" / plot_name, dpi=200)
-            plt.close()
+            fig.savefig(outdir / "plots" / plot_name, bbox_inches="tight")
+            plt.close(fig)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -444,6 +488,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--mask-renorm",
         action="store_true",
         help="renormalize masked x0 to unit length when nonzero",
+    )
+    parser.add_argument(
+        "--yscale",
+        choices=["none", "log"],
+        default="none",
+        help="y-axis scale for boxplots (default: none)",
+    )
+    parser.add_argument(
+        "--outlier-filter",
+        choices=["none", "iqr", "zscore", "mad", "trim"],
+        default="none",
+        help="outlier filtering for boxplots (default: none)",
+    )
+    parser.add_argument(
+        "--outlier-k",
+        type=float,
+        default=1.5,
+        help="threshold for iqr/zscore/mad filtering (default: 1.5)",
+    )
+    parser.add_argument(
+        "--outlier-trim",
+        type=float,
+        default=0.05,
+        help="fraction to trim from each tail when outlier-filter=trim (default: 0.05)",
     )
 
     parser.add_argument(
