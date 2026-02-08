@@ -43,7 +43,8 @@ class ExpConfig:
     x0_mode: Literal["gaussian", "rademacher", "ones", "zero"] = "gaussian"
 
     # --- Input signal options ---
-    signal: Literal["prbs", "multisine"] = "prbs"
+    signal: Literal["prbs", "multisine", "pe_sig"] = "prbs"
+    pe_family: Literal["prbs", "multisine"] = "prbs"
     sigPE: int = 12 # desired PE order for the control input                   
     U_restr: Optional[np.ndarray] = None # pointwise constraint basis W \in R^{m×q}
     PE_r: Optional[int] = None                   # moment-PE (nonlocal) constraint
@@ -78,7 +79,10 @@ class ExpConfig:
         # Validate PE order target if used
         if self.PE_r is not None and self.PE_r <= 0:
             raise ValueError("PE_r must be a positive integer if provided.")
-        
+
+        if self.signal == "pe_sig" and self.pe_family not in ("prbs", "multisine"):
+            raise ValueError("pe_family must be 'prbs' or 'multisine' when signal='pe_sig'.")
+
         if self.moesp_s is not None and self.moesp_s <= 0:
             raise ValueError("moesp_s must be positive when provided.")
 

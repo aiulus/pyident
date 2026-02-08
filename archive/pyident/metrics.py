@@ -350,18 +350,12 @@ def pbh_margin_with_ring(A: np.ndarray, K: np.ndarray,
 # ====================== Overlaps / errors ============================
 
 def left_eigvec_overlap(A: np.ndarray, X: np.ndarray) -> np.ndarray:
-    """Return normalized overlaps with left eigenvectors of A.
-
-    s_i = ||w_i^T X||_2 / (||w_i||_2 * ||X||_2), so s_i ∈ [0, 1].
-    """
+    """Return s with s_i = ||w_i^T X||_2 / ||w_i||_2 (left eigenvectors of A)."""
     lam, W = npl.eig(A.T)  # columns are eigenvectors of A^T
     num = npl.norm(W.T @ X, axis=1)
     den = npl.norm(W, axis=0)
     den = np.where(den == 0, 1.0, den)
-    xnorm = float(npl.norm(X, 2))
-    if not np.isfinite(xnorm) or xnorm == 0.0:
-        xnorm = 1.0
-    return (num / (den * xnorm)).real
+    return (num / den).real
 
 
 def x0R0_principle_angle(x0: np.ndarray, R0: np.ndarray) -> float:

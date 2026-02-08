@@ -61,7 +61,10 @@ def _add_common_single_args(p: argparse.ArgumentParser) -> None:
                    choices=["gaussian", "rademacher", "ones", "zero"])
 
     p.add_argument("--signal", type=str, default="prbs",
-                   choices=["prbs", "multisine"])
+                   choices=["prbs", "multisine", "pe_sig"])
+    p.add_argument("--pe-family", dest="pe_family", type=str, default="prbs",
+                   choices=["prbs", "multisine"],
+                   help="Signal family used when --signal=pe_sig.")
     p.add_argument("--sigPE", type=int, default=12,
                    help="Targeted richness for signal design.")
 
@@ -184,7 +187,10 @@ def parse_args():
     pu.add_argument("--dt", type=float, default=0.05)
     pu.add_argument("--ensemble", type=str, default="ginibre",
                     choices=["ginibre", "sparse", "stable", "binary"])
-    pu.add_argument("--signal", type=str, default="prbs", choices=["prbs", "multisine"])
+    pu.add_argument("--signal", type=str, default="prbs", choices=["prbs", "multisine", "pe_sig"])
+    pu.add_argument("--pe-family", dest="pe_family", type=str, default="prbs",
+                choices=["prbs", "multisine"],
+                help="Signal family used when --signal=pe_sig.")
     pu.add_argument("--sigPE", type=int, default=12)
     pu.add_argument("--seeds", type=str, default="0:50", help="e.g. '0:50' or '0,1,2'")
     pu.add_argument("--algs", type=str, default="dmdc,moesp,dmdc_tls,dmdc_iv")
@@ -221,7 +227,10 @@ def parse_args():
                      dest="sparse_which",
                      type=str, default="both",
                      choices=["A", "B", "both"])
-    psr.add_argument("--signal", type=str, default="prbs", choices=["prbs", "multisine"])
+    psr.add_argument("--signal", type=str, default="prbs", choices=["prbs", "multisine", "pe_sig"])
+    psr.add_argument("--pe-family", dest="pe_family", type=str, default="prbs",
+                 choices=["prbs", "multisine"],
+                 help="Signal family used when --signal=pe_sig.")
     psr.add_argument("--sigPE", type=int, default=12)
     psr.add_argument("--seeds", type=str, default="0:50", help="e.g. '0:50' or '0,1,2'")
     psr.add_argument("--algs", type=str, default="dmdc,moesp,dmdc_tls,dmdc_iv")
@@ -351,6 +360,7 @@ def main():
             p_density_B=a.p_density_B,
             x0_mode=a.x0_mode,
             signal=a.signal,
+            pe_family=a.pe_family,
             sigPE=a.sigPE,
             U_restr=U_restr,
             PE_r=a.PE_r,

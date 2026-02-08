@@ -46,16 +46,16 @@ python -m pyident.experiments.sim_scoree \
 --n 10 --m 10 --zoom --deficiency 1 --T 100 
 ```
 #### dim(V(x0))-stratified score-REE correlation over multiple systems (§5.1.1)
-```
+``
 python -m pyident.experiments.sim_mse --zoom
 --ensvol 200 --x0count 200 \
 --T 100 --n 5 --m 5 --dt 0.01
 ```
 #### Equivalence class membership tests (§5.1.2)
 ```
-python -m pyident.experiments.sim_escon --single --det
+python -m pyident.experiments.sim_equi --det 
 ```
-#### Single-varying-axis parameter regime sweeps
+#### Single-varying-axis parameter regime sweepss
 ##### S1: Sparsity (§5.2.1)
 ```
 python -m pyident.experiments.sim_regcomb --axes "sparsity" \

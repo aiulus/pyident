@@ -7,6 +7,7 @@ import inspect
 from .config import ExpConfig, SolverOpts
 from .ensembles import ginibre, sparse_continuous, stable, binary, draw_initial_state
 from .signals import prbs, multisine, restrict_pointwise, estimate_pe_order
+from .pe_sig import generate_pe_signal, PRBSSpec, MultisineSpec
 from .metrics import (
     cont2discrete_zoh,
     gramian_ct_infinite as gramian_ct,
@@ -64,6 +65,24 @@ def _gen_signal(cfg: ExpConfig, rng: np.random.Generator) -> np.ndarray:
     elif cfg.signal == "multisine":
         k_lines = max(4, min(cfg.sigPE, cfg.T // 4))
         u = multisine(cfg.T, cfg.m, rng, k_lines=k_lines)
+    elif cfg.signal == "pe_sig":
+        prbs_spec = PRBSSpec(register=max(2, cfg.sigPE), clock=cfg.dt)
+        multisine_spec = MultisineSpec(k_lines=max(1, cfg.sigPE))
+        bundle = generate_pe_signal(
+            family=cfg.pe_family,
+            T=cfg.T,
+            m=cfg.m,
+            dt=cfg.dt,
+            pe_order=cfg.sigPE,
+            rng=rng,
+            prbs=prbs_spec,
+            multisine=multisine_spec,
+            ensure_pe=True,
+            pe_method="block",
+            pe_tol=1e-8,
+            max_tries=128,
+        )
+        u = bundle.u
     else:
         raise ValueError(f"unknown signal: {cfg.signal}")
 

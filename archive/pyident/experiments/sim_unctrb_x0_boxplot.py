@@ -227,7 +227,7 @@ def run(args: argparse.Namespace) -> None:
 
     mode_configs: list[tuple[str, float]] = []
     p_list = [float(p) for p in args.mask_ps]
-    if not args.exclude_sphere and 1.0 not in p_list:
+    if 1.0 not in p_list:
         p_list.append(1.0)
     p_list = sorted(set(p_list))
     for p in p_list:
@@ -577,11 +577,6 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="*",
         default=[0.25, 0.5, 0.75, 1.0],
         help="Bernoulli keep probabilities for masked x0 sampling",
-    )
-    parser.add_argument(
-        "--exclude-sphere",
-        action="store_true",
-        help="do not automatically include sphere (p=1) when using --mask-ps",
     )
     parser.add_argument(
         "--mask-renorm",

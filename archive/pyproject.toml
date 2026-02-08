@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyident-iclr-archive"
+version = "0.1.0"
+description = "Minimal PyIdent subset for the ICLR pipeline"
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "scipy>=1.10",
+  "matplotlib>=3.7",
+]
+
+[tool.setuptools]
+packages = ["pyident", "pyident.experiments", "pyident.loggers"]

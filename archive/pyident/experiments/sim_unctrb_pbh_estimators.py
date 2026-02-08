@@ -21,9 +21,9 @@ import pandas as pd
 
 from ..metrics import pbh_margin_structured
 from ..metrics import left_eigvec_overlap
-from ..projectors import build_visible_basis_dt, visible_from_traj
+from ..projectors import build_visible_basis_dt
 from ..simulation import simulate_dt
-from ..estimators import dmdc_ridge, dmdc_tls, moesp_fit_old, sindy_fit, node_fit
+from ..estimators import dmdc_tls
 from ..experiments.sim_unctrb_x0_boxplot import (
     sample_unit_sphere,
     sample_masked_sphere,
@@ -90,42 +90,24 @@ def _visible_basis(A: np.ndarray, B: np.ndarray, x0: np.ndarray, tol: float) -> 
     return build_visible_basis_dt(A, B, x0, tol=tol)
 
 
-def _visible_basis_empirical(X: np.ndarray, tol: float) -> np.ndarray:
-    return visible_from_traj(X, tol=tol)
-
-
-def _moesp_wrapper(X0: np.ndarray, X1: np.ndarray, U_cm: np.ndarray, dt: float) -> tuple[np.ndarray, np.ndarray]:
-    n = X0.shape[0]
-    return moesp_fit_old(X0, X1, U_cm, n=n)
-
-
-def _resolve_estimators(names: Sequence[str], dmdc_fn):
+def _resolve_estimators(names: Sequence[str]):
     registry = {
-        "SINDy": lambda X0, X1, U_cm, dt: sindy_fit(X0, X1, U_cm, dt),
-        "DMDc": lambda X0, X1, U_cm, dt: dmdc_fn(X0, X1, U_cm, dt),
-        "MOESP": _moesp_wrapper,
-        "NODE": lambda X0, X1, U_cm, dt: node_fit(
-            X0, X1, U_cm, dt, epochs=200, lr=1e-2, early_stopping=True, verbose=False
-        ),
+        "DMDc": lambda X0, X1, U_cm, dt: dmdc_tls(X0, X1, U_cm),
     }
     lookup = {k.lower(): k for k in registry.keys()}
-    resolved = []
+    resolved: list[str] = []
     for name in names:
         key = name.strip().lower()
         if not key:
             continue
         if key not in lookup:
-            raise ValueError(f"Unknown estimator '{name}'. Choose from {list(registry)}.")
+            raise ValueError(
+                f"Unknown estimator '{name}'. Only DMDc is supported in the archive subset."
+            )
         resolved.append(lookup[key])
     if not resolved:
         raise ValueError("No estimators selected.")
     return {name: registry[name] for name in resolved}
-
-
-def _dmdc_callable(args: argparse.Namespace):
-    if args.ridge:
-        return lambda X0, X1, U_cm, dt: dmdc_ridge(X0, X1, U_cm, lam=float(args.ridge_lam))
-    return lambda X0, X1, U_cm, dt: dmdc_tls(X0, X1, U_cm)
 
 
 def run(args: argparse.Namespace) -> None:
@@ -148,7 +130,7 @@ def run(args: argparse.Namespace) -> None:
 
     mode_configs: list[tuple[str, float]] = []
     p_list = [float(p) for p in args.mask_ps]
-    if not args.exclude_sphere and 1.0 not in p_list:
+    if 1.0 not in p_list:
         p_list.append(1.0)
     p_list = sorted(set(p_list))
     for p in p_list:
@@ -157,12 +139,7 @@ def run(args: argparse.Namespace) -> None:
         else:
             mode_configs.append(("mask", p))
 
-    dmdc_fn = _dmdc_callable(args)
-
-    estimators = _resolve_estimators(
-        args.algos.split(",") if args.algos else ["SINDy", "DMDc", "MOESP", "NODE"],
-        dmdc_fn,
-    )
+    estimators = _resolve_estimators(args.algos.split(",") if args.algos else ["DMDc"])
 
     selected_rows: list[dict[str, Any]] = []
     selected_A: list[np.ndarray] = []
@@ -209,6 +186,29 @@ def run(args: argparse.Namespace) -> None:
                 if pbh >= args.pbh_threshold:
                     continue
 
+                Vbasis = _visible_basis(A, B, x0, tol=args.visible_tol)
+                if Vbasis.shape[1] < int(args.min_visible_dim):
+                    continue
+
+                # Store selected triple
+                sel = {
+                    "system_index": sys_id,
+                    "x0_index": x0_idx,
+                    "mode": format_mode_label(mode, p_keep),
+                    "p_keep": p_keep,
+                    "pbh": float(pbh),
+                    "mu_min": compute_mu_min(A, B, x0),
+                    "pe_order": int(pe_order),
+                    "pe_order_est": np.nan,
+                    "meta_spectral_radius": float(rho),
+                    "meta_b_norm_fro": float(b_fro),
+                    "meta_b_min_row_norm": float(b_row),
+                    "meta_b_min_col_norm": float(b_col),
+                }
+                for col, val in row.items():
+                    if np.isscalar(val):
+                        sel[col] = val
+
                 # Simulate trajectory
                 U, pe_est = generate_pe_input(
                     T=args.T,
@@ -228,35 +228,7 @@ def run(args: argparse.Namespace) -> None:
                 X1 = X[:, 1:]
                 U_cm = U.T
 
-                if args.visible_basis == "empirical":
-                    Vbasis = _visible_basis_empirical(X, tol=args.visible_tol)
-                else:
-                    Vbasis = _visible_basis(A, B, x0, tol=args.visible_tol)
-
-                if Vbasis.shape[1] < int(args.min_visible_dim):
-                    continue
-                if args.require_partial and (Vbasis.shape[1] <= 0 or Vbasis.shape[1] >= n):
-                    continue
-
-                # Store selected triple
-                sel = {
-                    "system_index": sys_id,
-                    "x0_index": x0_idx,
-                    "mode": format_mode_label(mode, p_keep),
-                    "p_keep": p_keep,
-                    "pbh": float(pbh),
-                    "mu_min": compute_mu_min(A, B, x0),
-                    "pe_order": int(pe_order),
-                    "pe_order_est": int(pe_est),
-                    "visible_basis": args.visible_basis,
-                    "meta_spectral_radius": float(rho),
-                    "meta_b_norm_fro": float(b_fro),
-                    "meta_b_min_row_norm": float(b_row),
-                    "meta_b_min_col_norm": float(b_col),
-                }
-                for col, val in row.items():
-                    if np.isscalar(val):
-                        sel[col] = val
+                sel["pe_order_est"] = int(pe_est)
 
                 selected_rows.append(sel)
                 selected_A.append(A)
@@ -339,7 +311,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=12345, help="RNG seed")
     parser.add_argument("--x0-samples", type=int, default=10, help="x0 samples per mode per system")
     parser.add_argument("--mask-ps", nargs="*", default=[0.25, 0.5, 0.75, 1.0], help="Bernoulli keep probs")
-    parser.add_argument("--exclude-sphere", action="store_true", help="do not automatically include sphere (p=1) when using --mask-ps")
     parser.add_argument("--mask-renorm", action="store_true", help="renormalize masked x0")
     parser.add_argument("--x0-min-norm", type=float, default=0.0, help="minimum ||x0|| for masked sampling")
     parser.add_argument("--x0-min-support", type=int, default=0, help="minimum nonzeros in masked x0")
@@ -361,20 +332,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="minimum allowed dim V(x0); smaller dims are skipped",
     )
     parser.add_argument(
-        "--require-partial",
-        action="store_true",
-        help="require 0 < dim V(x0) < n (skip fully visible or empty cases)",
-    )
-    parser.add_argument(
-        "--visible-basis",
-        choices=["oracle", "empirical"],
-        default="oracle",
-        help=(
-            "basis for V(E): oracle uses A,B,x0; empirical uses the span of the "
-            "simulated trajectory"
-        ),
-    )
-    parser.add_argument(
         "--input-family",
         choices=["prbs", "multisine"],
         default="prbs",
@@ -393,17 +350,6 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=1e8,
         help="max allowed condition number of Z=[X;U] for DMDc (skip if exceeded)",
-    )
-    parser.add_argument(
-        "--ridge",
-        action="store_true",
-        help="use ridge-regularized DMDc instead of TLS",
-    )
-    parser.add_argument(
-        "--ridge-lam",
-        type=float,
-        default=1e-6,
-        help="ridge parameter for DMDc when --ridge is enabled",
     )
     parser.add_argument(
         "--max-spectral-radius",
@@ -434,7 +380,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--algos",
         type=str,
         default=None,
-        help="Comma-separated list of estimators (default: SINDy,DMDc,MOESP,NODE)",
+        help="Comma-separated list of estimators (archive subset supports: DMDc)",
     )
     return parser
 

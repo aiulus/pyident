@@ -14,9 +14,9 @@ from typing import Any, Dict, Sequence
 import numpy as np
 import pandas as pd
 
-from ..projectors import build_visible_basis_dt, visible_from_traj
+from ..projectors import build_visible_basis_dt
 from ..simulation import simulate_dt
-from ..estimators import dmdc_ridge, dmdc_tls, moesp_fit_old, sindy_fit, node_fit
+from ..estimators import dmdc_tls
 from .boxplot_style import set_default_mpl_style, nice_boxplot, nice_grouped_boxplot
 from .unctrb_utils import (
     condition_number,
@@ -25,7 +25,7 @@ from .unctrb_utils import (
 )
 
 
-ALG_ORDER = ["DMDc", "MOESP", "SINDy", "NODE"]
+ALG_ORDER = ["DMDc"]
 
 
 def relative_errors(Ahat: np.ndarray, Bhat: np.ndarray, Atrue: np.ndarray, Btrue: np.ndarray) -> Dict[str, float]:
@@ -46,42 +46,24 @@ def _visible_basis(A: np.ndarray, B: np.ndarray, x0: np.ndarray, tol: float) -> 
     return build_visible_basis_dt(A, B, x0, tol=tol)
 
 
-def _visible_basis_empirical(X: np.ndarray, tol: float) -> np.ndarray:
-    return visible_from_traj(X, tol=tol)
-
-
-def _moesp_wrapper(X0: np.ndarray, X1: np.ndarray, U_cm: np.ndarray, dt: float) -> tuple[np.ndarray, np.ndarray]:
-    n = X0.shape[0]
-    return moesp_fit_old(X0, X1, U_cm, n=n)
-
-
-def _resolve_estimators(names: Sequence[str], dmdc_fn):
+def _resolve_estimators(names: Sequence[str]):
     registry = {
-        "SINDy": lambda X0, X1, U_cm, dt: sindy_fit(X0, X1, U_cm, dt),
-        "DMDc": lambda X0, X1, U_cm, dt: dmdc_fn(X0, X1, U_cm, dt),
-        "MOESP": _moesp_wrapper,
-        "NODE": lambda X0, X1, U_cm, dt: node_fit(
-            X0, X1, U_cm, dt, epochs=200, lr=1e-2, early_stopping=True, verbose=False
-        ),
+        "DMDc": lambda X0, X1, U_cm, dt: dmdc_tls(X0, X1, U_cm),
     }
     lookup = {k.lower(): k for k in registry.keys()}
-    resolved = []
+    resolved: list[str] = []
     for name in names:
         key = name.strip().lower()
         if not key:
             continue
         if key not in lookup:
-            raise ValueError(f"Unknown estimator '{name}'. Choose from {list(registry)}.")
+            raise ValueError(
+                f"Unknown estimator '{name}'. Only DMDc is supported in the archive subset."
+            )
         resolved.append(lookup[key])
     if not resolved:
         raise ValueError("No estimators selected.")
     return {name: registry[name] for name in resolved}
-
-
-def _dmdc_callable(args: argparse.Namespace):
-    if args.ridge:
-        return lambda X0, X1, U_cm, dt: dmdc_ridge(X0, X1, U_cm, lam=float(args.ridge_lam))
-    return lambda X0, X1, U_cm, dt: dmdc_tls(X0, X1, U_cm)
 
 
 def run(args: argparse.Namespace) -> None:
@@ -102,12 +84,7 @@ def run(args: argparse.Namespace) -> None:
     n_max = int(max(A.shape[0] for A in A_list))
     pe_order = pe_order_from_nmax(n_max)
 
-    dmdc_fn = _dmdc_callable(args)
-
-    estimators = _resolve_estimators(
-        args.algos.split(",") if args.algos else ALG_ORDER,
-        dmdc_fn,
-    )
+    estimators = _resolve_estimators(args.algos.split(",") if args.algos else ALG_ORDER)
 
     rows: list[dict[str, Any]] = []
 
@@ -136,14 +113,8 @@ def run(args: argparse.Namespace) -> None:
         X1 = X[:, 1:]
         U_cm = U.T
 
-        if args.visible_basis == "empirical":
-            Vbasis = _visible_basis_empirical(X, tol=args.visible_tol)
-        else:
-            Vbasis = _visible_basis(A, B, x0, tol=args.visible_tol)
-
+        Vbasis = _visible_basis(A, B, x0, tol=args.visible_tol)
         if Vbasis.shape[1] < int(args.min_visible_dim):
-            continue
-        if args.require_partial and (Vbasis.shape[1] <= 0 or Vbasis.shape[1] >= n):
             continue
         # Restrict to the visible subspace V(x0), matching the theory:
         # A|_V = V^T A V, B|_V = V^T B
@@ -159,7 +130,6 @@ def run(args: argparse.Namespace) -> None:
             "dim_visible": int(Vbasis.shape[1]),
             "pe_order": int(pe_order),
             "pe_order_est": int(pe_est),
-            "visible_basis": args.visible_basis,
         }
         if selected_df is not None:
             for col, val in selected_df.iloc[idx].items():
@@ -274,20 +244,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="minimum allowed dim V(x0); smaller dims are skipped",
     )
     parser.add_argument(
-        "--require-partial",
-        action="store_true",
-        help="require 0 < dim V(x0) < n (skip fully visible or empty cases)",
-    )
-    parser.add_argument(
-        "--visible-basis",
-        choices=["oracle", "empirical"],
-        default="oracle",
-        help=(
-            "basis for V(E): oracle uses A,B,x0; empirical uses the span of the "
-            "simulated trajectory"
-        ),
-    )
-    parser.add_argument(
         "--input-family",
         choices=["prbs", "multisine"],
         default="prbs",
@@ -307,23 +263,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=1e8,
         help="max allowed condition number of Z=[X;U] for DMDc (skip if exceeded)",
     )
-    parser.add_argument(
-        "--ridge",
-        action="store_true",
-        help="use ridge-regularized DMDc instead of TLS",
-    )
-    parser.add_argument(
-        "--ridge-lam",
-        type=float,
-        default=1e-6,
-        help="ridge parameter for DMDc when --ridge is enabled",
-    )
 
     parser.add_argument(
         "--algos",
         type=str,
         default=None,
-        help="Comma-separated list of estimators (default: DMDc,MOESP,SINDy,NODE)",
+        help="Comma-separated list of estimators (archive subset supports: DMDc)",
     )
     parser.add_argument(
         "--yscale",
